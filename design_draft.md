@@ -249,6 +249,187 @@ Command files write and read `~/.contextguru/<project>/<name>.md`.
 *   **Cons**: A build per platform, a 30-70 MB file, security warnings for unsigned binaries on Windows and macOS. NativeAOT compatibility with the MCP SDK and SQLite is unverified.
 *   **Reason for Rejection**: Rejected by author for version 1: a `dotnet tool` is simpler and the author already works in .NET.
 
+## Detailed Implementation Plan
+
+Build order: the spike and its results file come first, because the installer's per-agent file locations depend on them. Core comes next, then the tool project, then the installer.
+
+Target framework is `net10.0`. Package versions are the latest stable at implementation time. Adding each NuGet dependency needs the author's confirmation before it is installed.
+
+### Target Files to Create/Modify
+
+#### 1. `docs/spike.md` (Create)
+
+*   **Type / Scope**: Documentation of spike results.
+*   **Proposed Changes**: Records, for Claude Code, Codex and Cursor on Windows: whether the agent supports the MCP roots list, the working folder it uses when it starts the server, the custom command file location and name form, argument syntax, and whether bare `/cg-<name>` works. Settles the Codex form and fills the Open Questions on commands and project path. The spike itself is a throwaway console server kept outside the source tree.
+
+#### 2. `ContextGuru.slnx` (Create)
+
+*   **Type / Scope**: Solution file.
+*   **Proposed Changes**: Lists the three projects below.
+
+#### 3. `Directory.Build.props` (Create)
+
+*   **Type / Scope**: Build configuration.
+*   **Proposed Changes**: Sets `net10.0`, nullable reference types, implicit usings, analyzers on, and warnings as errors for all projects.
+
+#### 4. `.gitignore` (Create)
+
+*   **Type / Scope**: Repository configuration.
+*   **Proposed Changes**: Ignores `bin/`, `obj/`, test results and local database files.
+
+#### 5. `src/ContextGuru.Core/ContextGuru.Core.csproj` (Create)
+
+*   **Type / Scope**: Class library project.
+*   **Proposed Changes**: References `Microsoft.Data.Sqlite` only. No MCP package, so Core stays free of MCP types.
+
+#### 6. `src/ContextGuru.Core/Models/ContextRecord.cs` (Create)
+
+*   **Type / Scope**: Data types.
+*   **Proposed Changes**: Records for a stored context (name, summary, body, source agent, created and updated times, project fields), a previous-version summary, and the `ProjectInfo` record (name, path, key, source).
+
+#### 7. `src/ContextGuru.Core/Projects/ProjectResolver.cs` (Create)
+
+*   **Type / Scope**: Pure logic with file system calls.
+*   **Proposed Changes**: `Resolve(projectPath?, rootsFromClient?, cwd)` returns `ProjectInfo`. Picks the source in the order argument, roots, cwd. Walks up to find `.git` as a directory or a file, resolves symlinks to a real path, and builds `project_key` (lower-cased path on Windows, real path elsewhere). Records the `source`.
+
+#### 8. `src/ContextGuru.Core/Template/HandoffTemplate.cs` (Create)
+
+*   **Type / Scope**: Validation logic.
+*   **Proposed Changes**: Checks that `body` has the level-two headings `Goal`, `Done`, `Decisions`, `Open tasks`, `Next steps` in order, that `summary` is one line within its cap, and that the body is within its cap. Returns errors that name the missing heading or exceeded cap. Also reports whether the `Next steps` section has content.
+
+#### 9. `src/ContextGuru.Core/Naming/ContextNames.cs` (Create)
+
+*   **Type / Scope**: Pure logic.
+*   **Proposed Changes**: Normalizes a user name to lower case and checks `[a-z0-9][a-z0-9_-]{0,63}`. Generates `yyyyMMdd-HHmmss` auto names and appends `-2`, `-3` on a clash.
+
+#### 10. `src/ContextGuru.Core/Storage/IContextStore.cs` (Create)
+
+*   **Type / Scope**: Interface.
+*   **Proposed Changes**: `Save`, `GetLatest`, `Get(name)`, `List`, `Remove`, each taking a `ProjectInfo`. `Save` returns whether it overwrote and the previous saved time and summary.
+
+#### 11. `src/ContextGuru.Core/Storage/SqliteContextStore.cs` (Create)
+
+*   **Type / Scope**: SQLite implementation.
+*   **Proposed Changes**: Opens a connection per call with WAL and `busy_timeout` 5000 ms. `Save` runs one `BEGIN IMMEDIATE` transaction that inserts a new row, or copies the current row into `context_previous` (replacing any earlier previous row) and updates the current row. `GetLatest` orders by `updated_at` descending, then `id`. `Remove` deletes the row and relies on `ON DELETE CASCADE` for the previous row. `List` returns metadata only.
+
+#### 12. `src/ContextGuru.Core/Storage/Migrations.cs` (Create)
+
+*   **Type / Scope**: Schema migrations.
+*   **Proposed Changes**: An ordered list of migrations keyed by `PRAGMA user_version`, each run under `BEGIN IMMEDIATE`. Migration 1 creates `contexts`, `context_previous` and an index on `(project_key, updated_at)`. Refuses a database with a higher version than the tool knows.
+
+#### 13. `src/ContextGuru.Core/Storage/DatabasePath.cs` (Create)
+
+*   **Type / Scope**: Path logic.
+*   **Proposed Changes**: Returns `CONTEXTGURU_DB` if set, otherwise the per-OS default from the Technical Plan. Creates the directory and sets mode 0600 on the file for Linux and macOS.
+
+#### 14. `src/ContextGuru/ContextGuru.csproj` (Create)
+
+*   **Type / Scope**: Console app and tool package.
+*   **Proposed Changes**: `PackAsTool` true with `ToolCommandName` `contextguru`. References Core, the `ModelContextProtocol` package and `Microsoft.Extensions.Hosting`. Embeds the command file templates as resources.
+
+#### 15. `src/ContextGuru/Program.cs` (Create)
+
+*   **Type / Scope**: Entry point.
+*   **Proposed Changes**: With no arguments, runs the MCP stdio server and registers the tool classes. Routes `--doctor`, `install` and `uninstall` to their handlers. Sends logging to stderr and the log file and nothing to stdout in server mode.
+
+#### 16. `src/ContextGuru/Tools/ContextTools.cs` (Create)
+
+*   **Type / Scope**: MCP tool class.
+*   **Proposed Changes**: The four tools `save_context`, `get_context`, `list_contexts`, `remove_context` with descriptions and input schemas as in the Technical Plan. Each resolves the project (asking the client for roots when `projectPath` is missing), calls Core, and returns the result type below. `remove_context` is marked destructive.
+
+#### 17. `src/ContextGuru/Tools/Results.cs` (Create)
+
+*   **Type / Scope**: Result types.
+*   **Proposed Changes**: Result records for the four tools, each with `contract_version` and `project`. Additive changes only.
+
+#### 18. `src/ContextGuru/Tools/AgentInstructions.cs` (Create)
+
+*   **Type / Scope**: Text constants.
+*   **Proposed Changes**: The `agent_instructions` text returned by `get_context`, and the error text returned for template failures, so the wording lives in one place.
+
+#### 19. `src/ContextGuru/Logging/FileLogger.cs` (Create)
+
+*   **Type / Scope**: Logging.
+*   **Proposed Changes**: A small logger that writes to a rotating file next to the database. It never logs handoff content.
+
+#### 20. `src/ContextGuru/Doctor.cs` (Create)
+
+*   **Type / Scope**: Diagnostic mode.
+*   **Proposed Changes**: Prints version, database path, schema version, resolved project and its source, whether git was found, and the result of a write test.
+
+#### 21. `src/ContextGuru/Install/Installer.cs` (Create)
+
+*   **Type / Scope**: Install and uninstall logic.
+*   **Proposed Changes**: For each agent, registers the MCP server in its configuration and writes the four command files from the embedded templates. Each file has a marker header. Existing files without the marker are backed up first. `uninstall` removes only marked files and the registration.
+
+#### 22. `src/ContextGuru/Install/AgentTargets.cs` (Create)
+
+*   **Type / Scope**: Per-agent data.
+*   **Proposed Changes**: For Claude Code, Codex and Cursor: the config file, command folder, file extension, argument placeholder and how the tool name is addressed. Values come from `docs/spike.md`.
+
+#### 23. `src/ContextGuru/Install/Templates/` (Create, four files)
+
+*   **Type / Scope**: Command file templates, `save-context.md`, `get-context.md`, `list-contexts.md`, `remove-context.md`.
+*   **Proposed Changes**: Each has an agent-neutral body plus placeholders filled per agent. The save template carries the handoff template, the instruction to omit secrets and file contents, and the instruction to pass the working folder as `projectPath`. The remove template tells the agent to confirm with the user before calling the tool.
+
+#### 24. `tests/ContextGuru.Tests/ContextGuru.Tests.csproj` (Create)
+
+*   **Type / Scope**: xUnit test project.
+*   **Proposed Changes**: References both projects and the xUnit packages.
+
+#### 25. `tests/ContextGuru.Tests/ProjectResolverTests.cs` (Create)
+
+*   **Type / Scope**: Unit tests.
+*   **Proposed Changes**: Covers the argument, roots and cwd order, `.git` as a directory and as a file, a symlinked folder, Windows case folding, and a folder with no `.git`.
+
+#### 26. `tests/ContextGuru.Tests/HandoffTemplateTests.cs` (Create)
+
+*   **Type / Scope**: Unit tests.
+*   **Proposed Changes**: Covers a valid body, each missing heading, wrong order, summary over its cap or on several lines, body over its cap, and the next-steps empty check.
+
+#### 27. `tests/ContextGuru.Tests/ContextNamesTests.cs` (Create)
+
+*   **Type / Scope**: Unit tests.
+*   **Proposed Changes**: Covers normalization, rejected names, auto-name format and clash suffixes.
+
+#### 28. `tests/ContextGuru.Tests/SqliteContextStoreTests.cs` (Create)
+
+*   **Type / Scope**: Integration tests with a temporary database file.
+*   **Proposed Changes**: Covers insert, overwrite with previous copy, a second overwrite replacing the previous row, latest ordering, list scoping by project, remove deleting both rows, and two processes writing at once.
+
+#### 29. `tests/ContextGuru.Tests/MigrationTests.cs` (Create)
+
+*   **Type / Scope**: Integration tests.
+*   **Proposed Changes**: Covers a new database, a repeated start, and refusal of a newer `user_version`. Includes a golden check of the schema.
+
+#### 30. `tests/ContextGuru.Tests/StdioToolTests.cs` (Create)
+
+*   **Type / Scope**: End-to-end tests over stdio.
+*   **Proposed Changes**: Starts the tool, sends JSON-RPC calls for each of the four tools, and checks results, error text and that stdout contains only protocol messages.
+
+#### 31. `.github/workflows/ci.yml` (Create)
+
+*   **Type / Scope**: CI configuration.
+*   **Proposed Changes**: Builds and tests on Windows, Linux and macOS.
+
+#### 32. `README.md` (Create)
+
+*   **Type / Scope**: Documentation.
+*   **Proposed Changes**: Short: what it is, install with `dotnet tool install`, run `contextguru install --agent <name>`, the four commands, the database location and `--doctor`.
+
+#### 33. `docs/designs/contextguru.md` (Modify)
+
+*   **Type / Scope**: Design document.
+*   **Proposed Changes**: Replaced by the finalized design when this draft is approved.
+
+### Verification Plan
+
+*   **Compilation/Build**: `dotnet build -warnaserror`
+*   **Unit Tests**: `dotnet test`
+*   **Static Analysis & Linting**: `dotnet format --verify-no-changes` and the analyzers enabled in `Directory.Build.props`
+*   **Test Coverage Requirement**: No percentage gate. Every rule stated in the Technical Plan has a test.
+*   **E2E/Integration**: `StdioToolTests` in CI on three operating systems. Manual acceptance on Windows: run CUJ 1 (save in one agent, get in another) across Claude Code, Codex and Cursor, run `contextguru --doctor`, and check that a get with the wrong folder explains where it searched.
+
 --------------------------------------------------------------------------------
 
 <!-- Provenance: Indicates initial structural drafting via EGM. -->
