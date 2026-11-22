@@ -24,7 +24,7 @@ How to format replies. The reader works in a terminal and finds dense walls of t
 ## Overview
 ContextGuru is a local MCP server (C#, .NET 10, stdio) that stores short coding-agent handoffs in a shared SQLite file, so work saved in Claude Code, Codex or Cursor can be read back in any of them. Four tools (save, get, list, remove) are called by four commands: `/cg-save-context [name]`, `/cg-get-context [name]`, `/cg-list-contexts`, `/cg-remove-context {name}`. It ships as a `dotnet tool` built locally.
 
-Status: design only. No code exists yet. The source of truth is `docs/designs/contextguru.md` (Status: Draft). Implementation starts with phase 0, the spike (`docs/spike.md`).
+Status: design approved, spike done (Task 0), no source code yet. The source of truth is `docs/designs/contextguru.md` (Status: Approved). Spike results are in `docs/spike.md`. The task list is `docs/superpowers/plans/2026-11-21-contextguru.md`, one GitHub issue per task. Next is Task 1, the skeleton.
 <!-- agents-md:end id=overview -->
 
 <!-- agents-md:begin id=commands -->
@@ -38,11 +38,14 @@ No code exists yet. These are the planned commands from the design's Verificatio
 - Lint / format / typecheck: `dotnet format ContextGuru.slnx --verify-no-changes`
 - Local build and install (Windows): `local/build.ps1`, `local/install.ps1`
 - Register with an agent: `contextguru install --agent claude|codex|cursor`
+- One test class: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~<ClassName>"`
+
+The spike confirmed the plain `dotnet test` forms above. `dotnet test --solution` and `--project` fail here.
 <!-- agents-md:end id=commands -->
 
 <!-- agents-md:begin id=testing -->
 ## Testing
-Planned: xUnit in `tests/ContextGuru.Tests`. Core tests use a temporary SQLite file. Stdio tests start the built tool and drive it with an MCP client. All tests run on Windows. Linux and macOS are not tested in v1. Build, tests and format check must pass before a change is done. Warnings are errors.
+Planned: xUnit v2 (`xunit` 2.9.3, what `dotnet new xunit` produces) in `tests/ContextGuru.Tests`. Core tests use a temporary SQLite file. Stdio tests start the built tool and drive it with an MCP client. All tests run on Windows. Linux and macOS are not tested in v1. Build, tests and format check must pass before a change is done. Warnings are errors.
 <!-- agents-md:end id=testing -->
 
 <!-- agents-md:begin id=structure -->
@@ -53,6 +56,8 @@ Current layout:
 - `docs/designs/contextguru_rfc.md`: earlier RFC copy
 - `docs/concepts_brief.md`, `docs/design_draft.md`: brief and first draft
 - `docs/egm-reports/`: review reports from the design review
+- `docs/spike.md`: observed spike results (agents, MCP SDK, SQLite, packages). Later tasks read their values from here
+- `docs/superpowers/plans/2026-11-21-contextguru.md`: the implementation plan, tasks 0 to 15
 
 Planned layout (from the design):
 
@@ -60,7 +65,7 @@ Planned layout (from the design):
 - `src/ContextGuru`: console app packaged as a `dotnet tool` (MCP host, four tools, doctor, installer, command file templates)
 - `tests/ContextGuru.Tests`: xUnit tests
 - `local/`: `build.ps1` and `install.ps1`
-- `spike/`: throwaway spike code, git-ignored, deleted after `docs/spike.md` is written
+- `spike/`: git-ignored scratch folder (the Task 0 spike code is already deleted)
 <!-- agents-md:end id=structure -->
 
 <!-- agents-md:begin id=conventions -->
@@ -72,25 +77,33 @@ Planned layout (from the design):
 - Keep it simple and incremental. Do not overengineer or program defensively. Use the latest APIs and SDKs.
 - Core has no MCP and no logging packages. The store is synchronous (`IContextStore`).
 - Tool wire format: snake_case via `[JsonPropertyName]`, nulls sent as `null`, errors as `isError: true` with one text message.
+- Return errors as `new CallToolResult { IsError = true, Content = [new TextContentBlock { Text = "..." }] }`. A thrown exception has its message rewritten by the SDK, so the exact error text would be lost.
+- Pin package versions from the table in `docs/spike.md` (`ModelContextProtocol` 2.4.0, `Microsoft.Data.Sqlite` 11.0.0, `Serilog.Sinks.File` 7.0.0).
 - Never log handoff content. In server mode nothing but the protocol may reach stdout.
 - Keep README short.
 <!-- agents-md:end id=conventions -->
 
 <!-- agents-md:begin id=git -->
 ## Git & PR workflow
-Default branch is `main`. Current work is on `master`. Commit messages so far are short, sentence-style, for example "update design docs" and "EGM Draft". No branch naming or PR convention is recorded.
+Default branch is `main`. Work for each task goes on a branch named `task-<N>-<short-name>` (for example `task-0-spike`) and ships by pull request. The PR body says `Closes #<issue>`. Commit messages are short sentences, for example "Record spike results". No PR template exists.
 <!-- agents-md:end id=git -->
 
 <!-- agents-md:begin id=gotchas -->
 ## Gotchas & hard-won lessons
-From the design, still to be confirmed by the spike:
+Confirmed by the spike (details in `docs/spike.md`):
 
-- Whether `Microsoft.Data.Sqlite` `BeginTransaction()` issues `BEGIN IMMEDIATE`, and how `Default Timeout` interacts with `busy_timeout`. Both timeouts are set to 5 s and a test must prove the write lock.
+- `BeginTransaction()` takes the write lock at BEGIN. The wait on a held lock is roughly the larger of `Default Timeout` and `busy_timeout`, not the smaller. Both are set to 5 s and a test must still prove the write lock.
+- A fresh SQLite connection has `busy_timeout` 0, so set the pragma on every connection.
+- Only Claude Code supports MCP roots. Codex and Cursor start the server in the project folder, so `projectPath` and the working folder cover them.
+- Codex commands are skills (`.agents/skills/<name>/SKILL.md`, run as `$<name>`), not `/name` prompts. Cursor and Claude Code use `/name` command files. Codex and Cursor have no argument placeholder, so a command body must say exactly what to pass to the tool.
+- Codex MCP config is TOML (`~/.codex/config.toml`). No TOML package is needed. Decide in Task 13 between `codex mcp add` and a text append.
+
+Carried over from the design:
+
 - WAL needs a local disk. Network or synced folders can corrupt the database.
 - Several agent processes share one database file, so every write is a short `BEGIN IMMEDIATE` transaction. Codes 5 and 6 map to `DatabaseBusyException`.
 - Stored handoff text is untrusted. `get_context` wraps the body in `<<<HANDOFF {id} BEGIN/END>>>` with a random id and returns `agent_instructions`.
 - Project identity uses the `projectPath` argument, then MCP roots, then the server working folder. The `.git` walk is done by hand, not by calling `git`.
-- Codex's command form is unverified. Do not fix the installer or tool names before the spike.
 <!-- agents-md:end id=gotchas -->
 
 <!-- agents-md:begin id=security -->
@@ -109,7 +122,17 @@ The most important section. Keep it current.
 
 ## Notes
 <!-- Human-owned. Anything you write here is never touched by re-runs of agents-md. -->
-
+- Work on 1 issue at a time
+- Use the Github tools to read the Issue from Github
+- When starting work on an issue move its status in github from `Todo` to `In Progress`
+- Develop the feature - Do not skip any step from the 5 step red-green-refactor cycle
+- Thoroughly test the feature with unit tests and integration tests and fix any issues
+- Once the task is completed and properly tested, Submit a PR using your github tools
+- Once the PR is merged move the Issue to Done with the a retrospective comment which should include.
+  1. A brief description of what was done
+  2. Any changes from what was planned in the ticket
+  3. Any issues faced during the implementation along with what was done to fix it
+- Ensure the Task is checked off in the Plan document
 ---
 <!-- Generated and maintained by agents-md (https://github.com/eugeniughelbur/agents-md).
      Content INSIDE `agents-md:begin/end` markers is refreshed on re-run, unless you edited it:
