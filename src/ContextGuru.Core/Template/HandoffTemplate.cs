@@ -15,7 +15,7 @@ public static partial class HandoffTemplate
     [GeneratedRegex("^[a-z0-9][a-z0-9_-]{0,63}$")]
     private static partial Regex NamePattern();
 
-    [GeneratedRegex(@"^(n/a|none)\.?$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^[-*]?\s*(n/a|none)\.?$", RegexOptions.IgnoreCase)]
     private static partial Regex PlaceholderPattern();
 
     public static IReadOnlyList<ValidationError> Validate(string summary, string body)
@@ -69,7 +69,9 @@ public static partial class HandoffTemplate
 
         // The section runs to the next level-two heading, or the end of the body.
         var end = headings.Where(h => h.Line > next.Line).Select(h => h.Line).DefaultIfEmpty(lines.Length).Min();
-        return lines[(next.Line + 1)..end].Any(l => !IsPlaceholder(l));
+        // The whole trimmed section is judged, not each line.
+        var section = string.Join('\n', lines[(next.Line + 1)..end]).Trim();
+        return section.Length > 0 && !PlaceholderPattern().IsMatch(section);
     }
 
     public static string NormalizeName(string name) => name.Trim().ToLowerInvariant();
@@ -78,13 +80,6 @@ public static partial class HandoffTemplate
 
     public static string BadNameMessage(string name) =>
         $"Name \"{name}\" is not valid. Use lower-case letters, digits, \"-\" and \"_\", starting with a letter or digit, up to 64 characters.";
-
-    // A blank line or a list marker followed by none or n/a carries no content.
-    static bool IsPlaceholder(string line)
-    {
-        var t = line.Trim().TrimStart('-', '*').Trim();
-        return t.Length == 0 || PlaceholderPattern().IsMatch(t);
-    }
 
     static string[] SplitLines(string text) => text.Split(["\r\n", "\n"], StringSplitOptions.None);
 

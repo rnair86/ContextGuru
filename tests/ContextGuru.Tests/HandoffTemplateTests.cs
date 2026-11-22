@@ -92,6 +92,19 @@ public class HandoffTemplateTests
     public void NextStepsHasContent_Placeholder_IsFalse(string next) =>
         Assert.False(HandoffTemplate.NextStepsHasContent(Valid.Replace("## Next steps\nN\n", $"## Next steps\n{next}\n")));
 
+    // The spec treats the whole trimmed section as the placeholder, with at most one leading marker.
+    [Theory]
+    [InlineData("none\nn/a")]
+    [InlineData("- none\n- n/a")]
+    [InlineData("-- none")]
+    [InlineData("none\n\nsoon")]
+    public void NextStepsHasContent_NotASinglePlaceholder_IsTrue(string next) =>
+        Assert.True(HandoffTemplate.NextStepsHasContent(Valid.Replace("## Next steps\nN\n", $"## Next steps\n{next}\n")));
+
+    [Fact]
+    public void NextStepsHasContent_PlaceholderBeforeAnotherHeading_IsFalse() =>
+        Assert.False(HandoffTemplate.NextStepsHasContent(Valid.Replace("## Next steps\nN\n", "## Next steps\n- none\n## Notes\nextra\n")));
+
     [Fact]
     public void NextStepsHasContent_RealStep_IsTrue() =>
         Assert.True(HandoffTemplate.NextStepsHasContent(Valid.Replace("## Next steps\nN\n", "## Next steps\nRun the tests\n")));
