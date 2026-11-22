@@ -84,7 +84,17 @@ public class HandoffTemplateTests
     public void Validate_MultiLineSummaryOver200_ReportsBothProblems() =>
         Assert.Equal(["Summary must be one line.", "Summary is 301 characters; the maximum is 200."], Messages(new string('a', 150) + "\n" + new string('b', 150), Valid));
 
-    [Fact] public void Validate_EmptyBody_Reports() => Assert.Equal(["Body is empty."], Messages("s", ""));
+    // The spec says Validate returns every problem, so an empty body also lacks all five headings.
+    [Theory]
+    [InlineData("")]
+    [InlineData("  \n ")]
+    public void Validate_EmptyBody_ReportsEmptyAndEveryMissingHeading(string body)
+    {
+        var messages = Messages("s", body);
+        Assert.Equal("Body is empty.", messages[0]);
+        Assert.Equal(["Goal", "Done", "Decisions", "Open tasks", "Next steps"],
+            messages.Skip(1).Select(m => m.Split('"')[1][3..]));
+    }
 
     [Fact]
     public void Validate_Body20000Chars_HasNoLengthError() =>

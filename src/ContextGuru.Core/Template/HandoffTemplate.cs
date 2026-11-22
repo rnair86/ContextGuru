@@ -33,12 +33,8 @@ public static partial class HandoffTemplate
         }
 
         var b = body.Trim();
-        if (b.Length == 0)
-        {
-            errors.Add(new("body", "Body is empty."));
-            return errors;
-        }
-        if (b.Length > MaxBodyLength) errors.Add(new("body", $"Body is {b.Length} characters; the maximum is {MaxBodyLength}."));
+        if (b.Length == 0) errors.Add(new("body", "Body is empty."));
+        else if (b.Length > MaxBodyLength) errors.Add(new("body", $"Body is {b.Length} characters; the maximum is {MaxBodyLength}."));
 
         var found = ParseHeadings(body).Select(h => Array.FindIndex(Required, r => r.Equals(h.Text, StringComparison.OrdinalIgnoreCase)))
             .Where(i => i >= 0).ToList();
