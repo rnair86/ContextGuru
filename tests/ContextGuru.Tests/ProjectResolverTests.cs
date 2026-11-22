@@ -95,9 +95,12 @@ public class ProjectResolverTests
         Assert.Equal(start, ProjectResolver.Resolve(start, [], t.Sub("c")).Path);
     }
 
-    [Fact]
-    public void Resolve_RelativePath_Throws() =>
-        Assert.Throws<InvalidProjectPathException>(() => ProjectResolver.Resolve(Path.Combine("some", "relative"), [], Path.GetTempPath()));
+    // "." exists as a folder, so only the absolute-path check rejects it.
+    [Theory]
+    [InlineData(".")]
+    [InlineData("some/relative")]
+    public void Resolve_RelativePath_Throws(string relative) =>
+        Assert.Throws<InvalidProjectPathException>(() => ProjectResolver.Resolve(relative, [], Path.GetTempPath()));
 
     [Fact]
     public void Resolve_MissingFolder_Throws()
@@ -125,6 +128,14 @@ public class ProjectResolverTests
         var paths = ProjectResolver.RootPathsFromUris(["file:///C:/My%20Repo", "https://x"]);
         var one = Assert.Single(paths);
         Assert.EndsWith("My Repo", one, StringComparison.Ordinal);
+    }
+
+    // Codex review: .NET reads a bare path such as C:/Other as an implicit file URI, but the spec keeps only file: URIs.
+    [Fact]
+    public void RootPathsFromUris_IgnoresBarePaths()
+    {
+        var one = Assert.Single(ProjectResolver.RootPathsFromUris(["C:/Other", "file:///C:/Repo"]));
+        Assert.EndsWith("Repo", one, StringComparison.Ordinal);
     }
 
     [Fact]

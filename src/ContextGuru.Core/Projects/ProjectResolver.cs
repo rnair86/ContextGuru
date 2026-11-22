@@ -53,7 +53,8 @@ public static class ProjectResolver
     }
 
     public static IReadOnlyList<string> RootPathsFromUris(IEnumerable<string> uris) =>
-        [.. uris.Where(u => Uri.TryCreate(u, UriKind.Absolute, out var uri) && uri.IsFile).Select(u => new Uri(u).LocalPath)];
+        [.. uris.Where(u => u.StartsWith("file:", StringComparison.OrdinalIgnoreCase) && Uri.TryCreate(u, UriKind.Absolute, out var uri) && uri.IsFile)
+            .Select(u => new Uri(u).LocalPath)];
 
     // Resolves each segment that is a symlink or junction, so a link in a parent folder is resolved too.
     static string ResolveRealPath(string path)
