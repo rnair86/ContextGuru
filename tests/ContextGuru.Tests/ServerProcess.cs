@@ -4,6 +4,8 @@ using ModelContextProtocol.Client;
 namespace ContextGuru.Tests;
 
 /// <summary>Runs the built tool (dotnet ContextGuru.dll from the test output folder) as a child process.</summary>
+public sealed record ExitResult(int ExitCode, string Stdout, string Stderr);
+
 public sealed class ServerProcess : IAsyncDisposable
 {
     static readonly string Dll = Path.Combine(AppContext.BaseDirectory, "ContextGuru.dll");
@@ -50,7 +52,41 @@ public sealed class ServerProcess : IAsyncDisposable
             EnvironmentVariables = new Dictionary<string, string?> { ["CONTEXTGURU_DB"] = dbPath },
         });
 
-    public Task<int> WaitForExitAsync() => _process.WaitForExitAsync().ContinueWith(_ => _process.ExitCode, TaskScheduler.Default);
+    public bool HasExited => _process.HasExited;
+
+    /// <summary>Reads one stdout line. On timeout the child is killed and the test fails.</summary>
+    public async Task<string?> ReadLineAsync(TimeSpan timeout)
+    {
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            return await StandardOutput.ReadLineAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            Kill();
+            throw Xunit.Sdk.FailException.ForFailure($"No stdout line within {timeout}.");
+        }
+    }
+
+    /// <summary>Waits for exit while draining stdout and stderr, so a full pipe cannot block the child. On timeout the child is killed and the test fails.</summary>
+    public async Task<ExitResult> WaitForExitAsync(TimeSpan? timeout = null)
+    {
+        var limit = timeout ?? TimeSpan.FromSeconds(30);
+        var stdout = StandardOutput.ReadToEndAsync();
+        var stderr = StandardError.ReadToEndAsync();
+        using var cts = new CancellationTokenSource(limit);
+        try
+        {
+            await _process.WaitForExitAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            Kill();
+            throw Xunit.Sdk.FailException.ForFailure($"Process did not exit within {limit}.");
+        }
+        return new ExitResult(_process.ExitCode, await stdout, await stderr);
+    }
 
     public void Kill() => _process.Kill(entireProcessTree: true);
 
