@@ -189,6 +189,27 @@ public class ProjectResolverTests
         Assert.Equal(child, p.Path);
     }
 
+    // Codex review: a link to a filesystem root lost its root when the trailing separator was trimmed.
+    [Fact]
+    public void Resolve_LinkToFilesystemRoot_KeepsTheRoot()
+    {
+        using var t = new TempDir();
+        var root = Path.GetPathRoot(t.Path)!;
+        var link = Path.Combine(t.Path, "link");
+        if (!TryLink(link, root)) return;
+        try
+        {
+            var p = ProjectResolver.Resolve(link, [], t.Path);
+            Assert.Equal(root, p.Path);
+            Assert.Equal(root, p.Name);
+            Assert.Equal(HomeWarning, p.Warning);
+        }
+        finally
+        {
+            Directory.Delete(link); // removes only the link, never the target
+        }
+    }
+
     [Theory]
     [InlineData(@"C:\Users\Me\Repo\", @"c:\users\me\repo")]
     [InlineData("C:/Users/Me/Repo", @"c:\users\me\repo")]

@@ -61,7 +61,10 @@ public static class ProjectResolver
         foreach (var segment in full[current.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
         {
             var next = Path.Combine(current, segment);
-            current = new DirectoryInfo(next).ResolveLinkTarget(returnFinalTarget: true)?.FullName.TrimEnd(Path.DirectorySeparatorChar) is { Length: > 0 } target ? target : next;
+            // TrimEndingDirectorySeparator keeps a filesystem root such as C:\ or / intact.
+            current = new DirectoryInfo(next).ResolveLinkTarget(returnFinalTarget: true) is { } target
+                ? Path.TrimEndingDirectorySeparator(target.FullName)
+                : next;
         }
         return current;
     }
