@@ -48,11 +48,19 @@ public static partial class HandoffTemplate
                 errors.Add(new("body", $"Heading \"## {name}\" appears more than once."));
         }
 
-        // Order is judged on the first occurrence of each heading.
+        // A heading is out of order when it comes before a heading that should precede it, judged on first occurrences.
+        // A repeated heading is also out of order when it comes back after a heading that should follow it.
         var firsts = found.Distinct().ToList();
-        for (var i = 0; i < firsts.Count; i++)
-            if (firsts.Skip(i + 1).Any(later => later < firsts[i]))
-                errors.Add(new("body", $"Heading \"## {Required[firsts[i]]}\" is out of order. Required order: {RequiredList}."));
+        List<int> outOfOrder = [.. firsts.Where((f, i) => firsts.Skip(i + 1).Any(later => later < f))];
+        HashSet<int> seen = [];
+        var highest = -1;
+        foreach (var f in found)
+        {
+            if (!seen.Add(f) && f < highest && !outOfOrder.Contains(f)) outOfOrder.Add(f);
+            highest = Math.Max(highest, f);
+        }
+        foreach (var f in outOfOrder)
+            errors.Add(new("body", $"Heading \"## {Required[f]}\" is out of order. Required order: {RequiredList}."));
 
         return errors;
     }

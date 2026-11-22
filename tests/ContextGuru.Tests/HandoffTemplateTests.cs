@@ -22,6 +22,20 @@ public class HandoffTemplateTests
     public void Validate_DuplicateGoal_Reports() =>
         Assert.Contains(HandoffTemplate.Validate("s", Valid + "## Goal\nagain\n"), e => e.Message == "Heading \"## Goal\" appears more than once.");
 
+    // A repeated heading that comes after later sections breaks the order too, and the retry needs both facts.
+    [Fact]
+    public void Validate_DuplicateGoalAtEnd_ReportsDuplicateAndOrder() =>
+        Assert.Equal(
+            [
+                "Heading \"## Goal\" appears more than once.",
+                "Heading \"## Goal\" is out of order. Required order: Goal, Done, Decisions, Open tasks, Next steps.",
+            ],
+            Messages("s", Valid + "## Goal\nagain\n"));
+
+    [Fact]
+    public void Validate_DuplicateInPlace_ReportsOnlyDuplicate() =>
+        Assert.Equal(["Heading \"## Goal\" appears more than once."], Messages("s", "## Goal\nG\n## Goal\nagain\n" + Valid.Replace("## Goal\nG\n", "")));
+
     [Fact]
     public void Validate_DoneBeforeGoal_IsOutOfOrder() =>
         Assert.Contains(HandoffTemplate.Validate("s", "## Done\nD\n## Goal\nG\n## Decisions\nX\n## Open tasks\nO\n## Next steps\nN\n"),
