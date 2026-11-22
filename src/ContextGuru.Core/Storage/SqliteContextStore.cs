@@ -69,7 +69,7 @@ public sealed class SqliteContextStore(string dbPath, TimeProvider time) : ICont
             // An overwrite keeps id and created_at.
             var sql = previousSummary is null
                 ? "INSERT INTO contexts(project_key, project_path, project_name, name, summary, body, source_agent, created_at, updated_at) VALUES (@key, @path, @pname, @name, @summary, @body, @agent, @now, @now)"
-                : "UPDATE contexts SET project_path = @path, project_name = @pname, summary = @summary, body = @body, source_agent = @agent, updated_at = @now WHERE project_key = @key AND name = @name";
+                : "UPDATE contexts SET summary = @summary, body = @body, source_agent = @agent, updated_at = @now WHERE project_key = @key AND name = @name";
             using var write = new SqliteCommand(sql, c, tx);
             write.Parameters.AddWithValue("@key", project.Key);
             write.Parameters.AddWithValue("@path", project.Path);

@@ -52,6 +52,19 @@ public sealed class SqliteContextStoreTests : IDisposable
     }
 
     [Fact]
+    public void Save_Overwrite_KeepsProjectPathAndName()
+    {
+        store.Save(P, "auth", "s", Body, null);
+        var respelled = P with { Name = "App-Renamed", Path = @"c:\WORK\APP" };
+        store.Save(respelled, "auth", "s2", Body, null);
+        using var c = Migrations.Open(db);
+        using var cmd = new SqliteCommand("SELECT project_path, project_name, summary FROM contexts WHERE name = 'auth'", c);
+        using var r = cmd.ExecuteReader();
+        Assert.True(r.Read());
+        Assert.Equal((P.Path, P.Name, "s2"), (r.GetString(0), r.GetString(1), r.GetString(2)));
+    }
+
+    [Fact]
     public void Save_AutoName_UsesUtcStampThenSuffix()
     {
         time.Now = new DateTimeOffset(2026, 11, 21, 10, 30, 5, TimeSpan.Zero);
