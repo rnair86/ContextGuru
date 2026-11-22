@@ -84,4 +84,21 @@ public class ServerHostTests
         await Task.Delay(500);
         Assert.False(p.WaitForExitAsync().IsCompleted);
     }
+
+    [Fact]
+    public async Task Server_WithUncreatableDatabaseFolder_StillAnswersInitialize()
+    {
+        using var dir = new TempDir();
+        var file = Path.Combine(dir.Path, "afile");
+        await File.WriteAllTextAsync(file, "x");
+        // The database folder would be a path below an existing file, so it cannot be created.
+        await using var p = ServerProcess.Start(Path.Combine(file, "c.db"));
+        await p.StandardInput.WriteLineAsync(InitializeRequest);
+        await p.StandardInput.FlushAsync();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var reply = await p.StandardOutput.ReadLineAsync(cts.Token);
+        Assert.Contains("\"result\"", reply);
+        await Task.Delay(500);
+        Assert.False(p.WaitForExitAsync().IsCompleted);
+    }
 }

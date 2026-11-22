@@ -8,4 +8,7 @@ public sealed class StartupMigration
     public Task Completion { get; }
 
     public StartupMigration(string dbPath) => Completion = Task.Run(() => Migrations.Run(dbPath));
+
+    /// <summary>For a failure before migration could start, such as a database folder that cannot be created.</summary>
+    public StartupMigration(Exception failure) => Completion = Task.FromException(failure);
 }

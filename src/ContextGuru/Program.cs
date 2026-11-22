@@ -12,29 +12,47 @@ if (args.Length > 0)
     return 2;
 }
 
-var dbPath = SqliteContextStore.ResolveDatabasePath(Environment.GetEnvironmentVariable("CONTEXTGURU_DB"));
+// A path that cannot be prepared must not stop the server: the failure surfaces through StartupMigration.Completion.
+string? dbPath = null;
+StartupMigration migration;
+try
+{
+    dbPath = SqliteContextStore.ResolveDatabasePath(Environment.GetEnvironmentVariable("CONTEXTGURU_DB"));
+    migration = new StartupMigration(dbPath);
+}
+catch (Exception e)
+{
+    migration = new StartupMigration(e);
+}
 
 var builder = Host.CreateApplicationBuilder(args);
 ConfigureLogging(builder, dbPath);
 builder.Services.AddMcpServer().WithStdioServerTransport();
-builder.Services.AddSingleton(new SqliteContextStore(dbPath, TimeProvider.System));
-builder.Services.AddSingleton(new StartupMigration(dbPath));
+if (dbPath is not null)
+{
+    builder.Services.AddSingleton(new SqliteContextStore(dbPath, TimeProvider.System));
+}
+builder.Services.AddSingleton(migration);
 
 var host = builder.Build();
 var logger = host.Services.GetRequiredService<ILogger<StartupMigration>>();
 var migrationFailed = LoggerMessage.Define<string>(LogLevel.Error, 0, "Migration failed: {Message}");
 // A failed migration (for example a newer schema) must not stop the server: tools report it.
-_ = host.Services.GetRequiredService<StartupMigration>().Completion.ContinueWith(
+_ = migration.Completion.ContinueWith(
     t => migrationFailed(logger, t.Exception!.GetBaseException().Message, null),
     TaskContinuationOptions.OnlyOnFaulted);
 await host.RunAsync();
 return 0;
 
-// Console goes to stderr only: stdout carries the protocol. The file log sits next to the database.
-static void ConfigureLogging(HostApplicationBuilder builder, string dbPath)
+// Console goes to stderr only: stdout carries the protocol. The file log sits next to the database, when there is one.
+static void ConfigureLogging(HostApplicationBuilder builder, string? dbPath)
 {
     builder.Logging.ClearProviders();
     builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
+    if (dbPath is null)
+    {
+        return;
+    }
     var logPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dbPath))!, "logs", "contextguru-.log");
     var serilog = new LoggerConfiguration()
         .MinimumLevel.Information()
