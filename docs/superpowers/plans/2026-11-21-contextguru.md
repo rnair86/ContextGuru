@@ -334,7 +334,7 @@ public static class Migrations
 }
 ```
 
-- [ ] **Step 1: Red. Write the tests (each uses a temp database path from `TempDir`)**
+- [x] **Step 1: Red. Write the tests (each uses a temp database path from `TempDir`)**
 
 ```csharp
 [Fact] public void Run_NewDatabase_CreatesSchemaAtLatest()
@@ -356,21 +356,21 @@ public static class Migrations
 
 Also: running twice changes nothing (same `user_version`, same schema); the normalized SQL from `sqlite_master` (collapse whitespace, one statement per line, sorted by name) equals the embedded `schema-v1.sql`, which holds the `contexts` table and `contexts_latest` index from the spec's Data model.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~MigrationTests"`
 Expected: FAIL to build, `Migrations` does not exist.
 
-- [ ] **Step 3: Green. Implement**
+- [x] **Step 3: Green. Implement**
 
-`Open` sets the connection string and runs the busy-timeout pragma. `Run` follows the spec's migration steps in one `BEGIN IMMEDIATE` transaction; the WAL pragma runs before it, once, when the database has no `user_version` yet. Migration 1 creates the table and index from the spec. Use the transaction-start decision recorded in `docs/spike.md`.
+`Open` sets the connection string and runs the busy-timeout pragma. `Run` follows the spec's migration steps in one `BEGIN IMMEDIATE` transaction; the WAL pragma runs before it, once, when the database has no `user_version` yet. Migration 1 creates the table and index from the spec. Use the transaction-start decision recorded in `docs/spike.md`. As built: `Migrations.Latest` is a static property (`Steps.Length`), not a `const`, so it cannot drift from the migration array; `ReadUserVersion` has an optional `SqliteTransaction? tx` so the read joins the transaction; an extra test checks that `Open` sets `busy_timeout` to 5000.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Make the migration list a private array of SQL strings indexed by version so adding migration 2 is one line. Re-run, `dotnet format`. Commit: "Add schema migrations".
 
