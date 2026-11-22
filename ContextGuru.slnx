@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ContextGuru.Core/ContextGuru.Core.csproj" />
+    <Project Path="src/ContextGuru/ContextGuru.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ContextGuru.Tests/ContextGuru.Tests.csproj" />
+  </Folder>
+</Solution>

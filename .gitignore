@@ -1,1 +1,9 @@
 spike/
+bin/
+obj/
+TestResults/
+*.db
+*.db-shm
+*.db-wal
+logs/
+local/nupkg/
