@@ -68,6 +68,10 @@ public class HandoffTemplateTests
     public void Validate_SummaryWithNewline_Reports() =>
         Assert.Equal(["Summary must be one line."], Messages("a\nb", Valid));
 
+    [Fact]
+    public void Validate_MultiLineSummaryOver200_ReportsBothProblems() =>
+        Assert.Equal(["Summary must be one line.", "Summary is 301 characters; the maximum is 200."], Messages(new string('a', 150) + "\n" + new string('b', 150), Valid));
+
     [Fact] public void Validate_EmptyBody_Reports() => Assert.Equal(["Body is empty."], Messages("s", ""));
 
     [Fact]

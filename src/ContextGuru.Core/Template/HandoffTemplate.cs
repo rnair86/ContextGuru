@@ -24,8 +24,12 @@ public static partial class HandoffTemplate
 
         var s = summary.Trim();
         if (s.Length == 0) errors.Add(new("summary", "Summary is empty."));
-        else if (s.Contains('\n') || s.Contains('\r')) errors.Add(new("summary", "Summary must be one line."));
-        else if (s.Length > MaxSummaryLength) errors.Add(new("summary", $"Summary is {s.Length} characters; the maximum is {MaxSummaryLength}."));
+        else
+        {
+            // Report both problems so the agent's single retry can fix them together.
+            if (s.Contains('\n') || s.Contains('\r')) errors.Add(new("summary", "Summary must be one line."));
+            if (s.Length > MaxSummaryLength) errors.Add(new("summary", $"Summary is {s.Length} characters; the maximum is {MaxSummaryLength}."));
+        }
 
         var b = body.Trim();
         if (b.Length == 0)
