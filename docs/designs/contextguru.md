@@ -1,7 +1,7 @@
 # ContextGuru: Cross-Agent Context Handoff
 
 *   **Author:** rnair86
-*   **Status:** Draft
+*   **Status:** Approved
 *   **Date:** 2026-11-20
 
 --------------------------------------------------------------------------------
@@ -53,11 +53,11 @@ The proposed solution is one command per action in each agent, backed by a share
 
 ## Open Questions
 
-*   **Command mechanism per agent**: What file location, name form and argument syntax does each of Claude Code, Codex and Cursor use for a custom command? Codex's form is unverified (earlier Codex versions used a `/prompts:` prefix). A spike is needed before the install step can be designed.
-*   **Project path source**: Does each agent support the MCP roots list, and what server working folder does each use when it starts the server? The design assumes the command passes `projectPath`, with the MCP roots and the server working folder as fallbacks. The spike must confirm the fallbacks behave as assumed.
-*   **Size caps**: What are the final size limits for the summary and the whole handoff? The values in the Handoff template section are proposals.
-*   **Install step**: How does the install command write command files and register the MCP server for each agent, and how does it update or remove them?
-*   **SDK and platform facts**: What is the current `ModelContextProtocol` NuGet package version and API? How does `Microsoft.Data.Sqlite` handle `Default Timeout`, `busy_timeout` and transaction start? Does it ship native SQLite for every target platform (Linux musl and arm)? The full list is in the spike item of the plan.
+*   **Command mechanism per agent**: Answered by the spike (`docs/spike.md`). Claude Code uses `.claude/commands/<name>.md` run as `/<name>` with `$ARGUMENTS`. Cursor uses `.cursor/commands/<name>.md` run as `/<name>`. Codex uses a skill, `.agents/skills/<name>/SKILL.md`, run as `$<name>`; its custom prompts are deprecated. Codex and Cursor have no argument placeholder, so the model reads the text after the command name.
+*   **Project path source**: Answered by the spike. Only Claude Code supports MCP roots. Codex and Cursor start the server in the project folder, so the `projectPath` argument and the working folder cover them. All three passed the folder through a custom command.
+*   **Size caps**: Still open. The values in the Handoff template section remain proposals.
+*   **Install step**: Partly answered. MCP config is JSON `mcpServers` for Claude Code (`.mcp.json`, `~/.claude.json`) and Cursor (`.cursor/mcp.json`, `~/.cursor/mcp.json`), and TOML `[mcp_servers.<name>]` in `~/.codex/config.toml` for Codex. No TOML package is needed, since `codex mcp add` or a text append can write the entry; decide in Task 13. A marker comment works on the first line of a command file and after the skill front matter.
+*   **SDK and platform facts**: Answered by the spike. `ModelContextProtocol` 2.4.0, `Microsoft.Data.Sqlite` 11.0.0 (bundled SQLite 3.53.4, `BeginTransaction()` takes the write lock at BEGIN). Tools must return `CallToolResult { IsError = true }` to keep the exact error text. Native SQLite on Linux musl and arm was not tested, since version 1 targets Windows only.
 
 ### Spike
 
