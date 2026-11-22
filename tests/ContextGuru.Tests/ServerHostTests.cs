@@ -101,4 +101,33 @@ public class ServerHostTests
         await Task.Delay(500);
         Assert.False(p.WaitForExitAsync().IsCompleted);
     }
+
+    [Fact]
+    public async Task Server_IgnoresMalformedAppSettingsInWorkingFolder()
+    {
+        using var dir = new TempDir();
+        var work = dir.Sub("work");
+        await File.WriteAllTextAsync(Path.Combine(work, "appsettings.json"), "{ not json");
+        await using var p = ServerProcess.Start(Path.Combine(dir.Path, "c.db"), workingFolder: work);
+        await p.StandardInput.WriteLineAsync(InitializeRequest);
+        await p.StandardInput.FlushAsync();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Assert.Contains("\"result\"", await p.StandardOutput.ReadLineAsync(cts.Token));
+    }
+
+    [Fact]
+    public async Task Server_IgnoresLoggingEnvOverride_NoRequestTextOnStderr()
+    {
+        using var dir = new TempDir();
+        await using var p = ServerProcess.Start(
+            Path.Combine(dir.Path, "c.db"),
+            env: new Dictionary<string, string> { ["Logging__Console__LogLevel__Default"] = "Trace" });
+        await p.StandardInput.WriteLineAsync(InitializeRequest.Replace("\"capabilities\":{}", "\"capabilities\":{},\"x\":\"SECRETPAYLOAD\""));
+        await p.StandardInput.FlushAsync();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Assert.Contains("\"result\"", await p.StandardOutput.ReadLineAsync(cts.Token));
+        p.StandardInput.Close();
+        await p.WaitForExitAsync();
+        Assert.DoesNotContain("SECRETPAYLOAD", await p.StandardError.ReadToEndAsync());
+    }
 }

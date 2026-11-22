@@ -25,7 +25,8 @@ catch (Exception e)
     migration = new StartupMigration(e);
 }
 
-var builder = Host.CreateApplicationBuilder(args);
+// No default configuration sources: project settings and logging env overrides must not change the server.
+var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings { Args = args });
 ConfigureLogging(builder, dbPath);
 builder.Services.AddMcpServer().WithStdioServerTransport();
 if (dbPath is not null)

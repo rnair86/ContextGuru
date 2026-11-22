@@ -17,7 +17,7 @@ public sealed class ServerProcess : IAsyncDisposable
     public StreamReader StandardError => _process.StandardError;
     public int Id => _process.Id;
 
-    public static ServerProcess Start(string dbPath, string[]? args = null, string? workingFolder = null)
+    public static ServerProcess Start(string dbPath, string[]? args = null, string? workingFolder = null, IDictionary<string, string>? env = null)
     {
         var info = new ProcessStartInfo("dotnet")
         {
@@ -33,6 +33,10 @@ public sealed class ServerProcess : IAsyncDisposable
             info.ArgumentList.Add(a);
         }
         info.Environment["CONTEXTGURU_DB"] = dbPath;
+        foreach (var (k, v) in env ?? new Dictionary<string, string>())
+        {
+            info.Environment[k] = v;
+        }
         return new ServerProcess(Process.Start(info)!);
     }
 
