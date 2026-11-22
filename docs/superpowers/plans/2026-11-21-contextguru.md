@@ -488,7 +488,7 @@ public sealed class ServerProcess : IAsyncDisposable
 ```
 `ServerProcess` runs `dotnet ContextGuru.dll` from the test output folder, with `CONTEXTGURU_DB` set.
 
-- [ ] **Step 1: Red. Write the tests**
+- [x] **Step 1: Red. Write the tests**
 
 ```csharp
 [Fact] public async Task UnknownArgument_PrintsUsageToStderr_ExitCode2()
@@ -512,23 +512,25 @@ public sealed class ServerProcess : IAsyncDisposable
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~ServerHostTests"`
 Expected: FAIL (exit code is 0 not 2, no stdout JSON, no log file).
 
-- [ ] **Step 3: Green. Implement `Program.cs` and `StartupMigration`**
+- [x] **Step 3: Green. Implement `Program.cs` and `StartupMigration`**
 
 Hand-written routing: no arguments runs the host; `--doctor`, `install`, `uninstall` call handlers added in Tasks 9 and 12 (for now they print usage and return 2); anything else prints usage to stderr and returns 2. Host: clear logging providers, console logger with `LogToStandardErrorThreshold = LogLevel.Trace`, Serilog file output from the spike's decision (daily rolling, 7 files, shared writing, `Environment.ProcessId` in the line template), minimum level Information, `AddMcpServer().WithStdioServerTransport()`. Register `SqliteContextStore` and `StartupMigration` as singletons and resolve `StartupMigration` at start.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Move logging setup into a private `ConfigureLogging(HostApplicationBuilder)` method. Re-run, `dotnet format`. Commit: "Add MCP host, logging and startup migration".
+
+As built: the newer-schema and log-file tests drive the child over raw stdio (not the SDK client) so they can see its process id and exit state. `ServerProcess.Id` was added. A failed migration is only logged and the server stays up, so the tools in Tasks 7 and 8 must await `StartupMigration.Completion` and report its fault.
 
 ---
 
