@@ -90,6 +90,17 @@ public sealed partial class MigrationTests
     }
 
     [Fact]
+    public void Run_PathWithSemicolon_CreatesSchema()
+    {
+        using var t = new TempDir();
+        var db = Path.Combine(t.Sub("team;notes"), "contexts.db");
+        Migrations.Run(db);
+        using var c = Migrations.Open(db);
+        Assert.Equal(Migrations.Latest, Migrations.ReadUserVersion(c));
+        Assert.Equal(1L, Scalar(c, "SELECT count(*) FROM sqlite_master WHERE name = 'contexts'"));
+    }
+
+    [Fact]
     public void Open_SetsBusyTimeout()
     {
         using var t = new TempDir();
