@@ -403,7 +403,7 @@ public sealed class SqliteContextStore(string dbPath, TimeProvider time) : ICont
 ```
 The store does not migrate. Callers run `Migrations.Run` first.
 
-- [ ] **Step 1: Red. Write the tests (temp database, `Migrations.Run` in the fixture)**
+- [x] **Step 1: Red. Write the tests (temp database, `Migrations.Run` in the fixture)**
 
 ```csharp
 [Fact] public void Save_Overwrite_KeepsIdAndCreatedAtAndReportsPrevious()
@@ -439,23 +439,23 @@ The store does not migrate. Callers run `Migrations.Run` first.
 
 Also: `Get` found and not found; same name in two projects stays separate; `GetLatest` order with a fixed clock and the `id DESC` tie-break at equal `updated_at`; `List` newest first with no body; `Remove` returns the record then null on the second call; `ResolveDatabasePath(null)` ends with `ContextGuru/contexts.db` under local app data; on Unix only, folder mode 0700 and file mode 0600 after the first save (guard with `OperatingSystem.IsWindows()` and return early).
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~SqliteContextStoreTests"`
 Expected: FAIL to build, `SqliteContextStore` does not exist.
 
-- [ ] **Step 3: Green. Implement per the spec's store item**
+- [x] **Step 3: Green. Implement per the spec's store item**
 
 Connection per call via `Migrations.Open`. Writes use the transaction form chosen in the spike. Map `SqliteException` codes 5 and 6 to `DatabaseBusyException`. Format timestamps with `ToString("yyyy-MM-ddTHH:mm:ss.fff'Z'")` on the UTC value. `Remove` uses `DELETE ... RETURNING` (SQLite 3.35 or later confirmed by the spike). `ResolveDatabasePath` creates the folder and, on Unix, applies `UnixFileMode` 0700 to the folder and creates the empty file with 0600.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS (the busy test takes about 5 seconds).
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
-Extract a private `ExecuteWrite<T>(Func<SqliteConnection, T>)` so the exception mapping lives in one place. Re-run, `dotnet format`. Commit: "Add SQLite context store".
+Extract a private `ExecuteWrite<T>(Func<SqliteConnection, T>)` so the exception mapping lives in one place. As built: it is `Func<SqliteConnection, SqliteTransaction, T>`, because every command inside `BeginTransaction()` must be given the transaction; `IContextStore.Get` has a single-rule `SuppressMessage` for CA1716 (`Get` is the specified name). Re-run, `dotnet format`. Commit: "Add SQLite context store".
 
 ---
 
