@@ -63,6 +63,7 @@ static void ConfigureLogging(HostApplicationBuilder builder, string? dbPath)
             formatProvider: System.Globalization.CultureInfo.InvariantCulture,
             outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] [{ProcessId}] {Message:lj}{NewLine}{Exception}",
             rollingInterval: RollingInterval.Day,
+            fileSizeLimitBytes: null,
             retainedFileCountLimit: 7,
             shared: true)
         .CreateLogger();
