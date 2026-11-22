@@ -57,9 +57,14 @@ public sealed partial class MigrationTests
         using (var c = Migrations.Open(db))
         {
             Scalar(c, "PRAGMA user_version = 99");
+            Scalar(c, "DROP INDEX contexts_latest");
+            Scalar(c, "DROP TABLE contexts");
         }
         var ex = Assert.Throws<SchemaTooNewException>(() => Migrations.Run(db));
         Assert.Equal((99, 1), (ex.Found, ex.Supported));
+        using var c2 = Migrations.Open(db);
+        Assert.Equal(99, Migrations.ReadUserVersion(c2));
+        Assert.Equal(0L, Scalar(c2, "SELECT count(*) FROM sqlite_master WHERE name = 'contexts'"));
     }
 
     [Fact]
@@ -72,9 +77,11 @@ public sealed partial class MigrationTests
         using (var c = Migrations.Open(db))
         {
             first = NormalizedSchema(c);
+            Scalar(c, "INSERT INTO contexts(project_key, project_path, project_name, name, summary, body, created_at, updated_at) VALUES ('k', 'p', 'n', 'x', 's', 'b', 't', 't')");
         }
         Migrations.Run(db);
         using var c2 = Migrations.Open(db);
+        Assert.Equal(1L, Scalar(c2, "SELECT count(*) FROM contexts WHERE name = 'x'"));
         Assert.Equal(Migrations.Latest, Migrations.ReadUserVersion(c2));
         Assert.Equal(first, NormalizedSchema(c2));
     }
@@ -114,5 +121,8 @@ public sealed partial class MigrationTests
         using var t = new TempDir();
         using var c = Migrations.Open(NewDbPath(t));
         Assert.Equal(5000L, Scalar(c, "PRAGMA busy_timeout"));
+        Assert.Equal(5, c.DefaultTimeout);
+        Assert.DoesNotContain("pooling=true", c.ConnectionString, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("pooling=false", c.ConnectionString, StringComparison.OrdinalIgnoreCase);
     }
 }
