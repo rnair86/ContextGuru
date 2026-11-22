@@ -1,0 +1,114 @@
+using ContextGuru.Core.Template;
+
+namespace ContextGuru.Tests;
+
+public class HandoffTemplateTests
+{
+    const string Valid = "## Goal\nG\n## Done\nD\n## Decisions\nX\n## Open tasks\nO\n## Next steps\nN\n";
+
+    static string[] Messages(string summary, string body) =>
+        [.. HandoffTemplate.Validate(summary, body).Select(e => e.Message)];
+
+    [Fact] public void Validate_ValidBody_ReturnsNoErrors() => Assert.Empty(HandoffTemplate.Validate("s", Valid));
+
+    [Fact]
+    public void Validate_MissingDecisions_NamesIt()
+    {
+        var e = Assert.Single(HandoffTemplate.Validate("s", Valid.Replace("## Decisions\nX\n", "")));
+        Assert.Equal("Missing required heading: \"## Decisions\". Required headings, in order: Goal, Done, Decisions, Open tasks, Next steps.", e.Message);
+    }
+
+    [Fact]
+    public void Validate_DuplicateGoal_Reports() =>
+        Assert.Contains(HandoffTemplate.Validate("s", Valid + "## Goal\nagain\n"), e => e.Message == "Heading \"## Goal\" appears more than once.");
+
+    [Fact]
+    public void Validate_DoneBeforeGoal_IsOutOfOrder() =>
+        Assert.Contains(HandoffTemplate.Validate("s", "## Done\nD\n## Goal\nG\n## Decisions\nX\n## Open tasks\nO\n## Next steps\nN\n"),
+            e => e.Message == "Heading \"## Done\" is out of order. Required order: Goal, Done, Decisions, Open tasks, Next steps.");
+
+    [Theory]
+    [InlineData("```")]
+    [InlineData("~~~")]
+    public void Validate_HeadingInsideFence_IsIgnored(string fence) =>
+        Assert.Contains(HandoffTemplate.Validate("s", Valid.Replace("## Done\nD\n", $"{fence}\n## Done\n{fence}\n")),
+            e => e.Message.StartsWith("Missing required heading: \"## Done\"", StringComparison.Ordinal));
+
+    [Fact]
+    public void Validate_UnclosedFence_IgnoresRest() =>
+        Assert.Contains(HandoffTemplate.Validate("s", "## Goal\nG\n```\n## Done\nD\n## Decisions\nX\n## Open tasks\nO\n## Next steps\nN\n"),
+            e => e.Message.StartsWith("Missing required heading: \"## Done\"", StringComparison.Ordinal));
+
+    [Fact]
+    public void Validate_ExtraLevelTwoHeading_IsAllowed() =>
+        Assert.Empty(HandoffTemplate.Validate("s", Valid + "## Notes\nextra\n"));
+
+    [Fact]
+    public void Validate_LevelThreeHeading_DoesNotCount() =>
+        Assert.Contains(HandoffTemplate.Validate("s", Valid.Replace("## Done\n", "### Done\n")),
+            e => e.Message.StartsWith("Missing required heading: \"## Done\"", StringComparison.Ordinal));
+
+    [Fact]
+    public void Validate_PaddedMixedCaseHeading_IsAccepted() =>
+        Assert.Empty(HandoffTemplate.Validate("s", Valid.Replace("## Goal", "##  goal  ")));
+
+    [Fact]
+    public void Validate_CrLfBody_IsAccepted() =>
+        Assert.Empty(HandoffTemplate.Validate("s", Valid.Replace("\n", "\r\n")));
+
+    [Fact] public void Validate_EmptySummary_Reports() => Assert.Equal(["Summary is empty."], Messages("", Valid));
+
+    [Fact] public void Validate_Summary200Chars_IsOk() => Assert.Empty(HandoffTemplate.Validate(new string('a', 200), Valid));
+
+    [Fact]
+    public void Validate_Summary201Chars_Reports() =>
+        Assert.Equal(["Summary is 201 characters; the maximum is 200."], Messages(new string('a', 201), Valid));
+
+    [Fact]
+    public void Validate_SummaryWithNewline_Reports() =>
+        Assert.Equal(["Summary must be one line."], Messages("a\nb", Valid));
+
+    [Fact] public void Validate_EmptyBody_Reports() => Assert.Equal(["Body is empty."], Messages("s", ""));
+
+    [Fact]
+    public void Validate_Body20000Chars_HasNoLengthError() =>
+        Assert.DoesNotContain(Messages("s", Valid + new string('a', 20_000 - Valid.Length)), m => m.StartsWith("Body is", StringComparison.Ordinal));
+
+    [Fact]
+    public void Validate_Body20001Chars_Reports() =>
+        Assert.Contains("Body is 20001 characters; the maximum is 20000.", Messages("s", Valid + new string('a', 20_001 - Valid.Length)));
+
+    [Theory]
+    [InlineData("none")]
+    [InlineData("n/a")]
+    [InlineData("- none")]
+    [InlineData("* N/A.")]
+    [InlineData("None.")]
+    [InlineData("")]
+    public void NextStepsHasContent_Placeholder_IsFalse(string next) =>
+        Assert.False(HandoffTemplate.NextStepsHasContent(Valid.Replace("## Next steps\nN\n", $"## Next steps\n{next}\n")));
+
+    [Fact]
+    public void NextStepsHasContent_RealStep_IsTrue() =>
+        Assert.True(HandoffTemplate.NextStepsHasContent(Valid.Replace("## Next steps\nN\n", "## Next steps\nRun the tests\n")));
+
+    [Fact] public void NormalizeName_TrimsAndLowers() => Assert.Equal("auth-refactor", HandoffTemplate.NormalizeName("  Auth-Refactor "));
+
+    [Theory]
+    [InlineData("a", true)]
+    [InlineData("0-x_y", true)]
+    [InlineData("-x", false)]
+    [InlineData("a b", false)]
+    [InlineData("café", false)]
+    [InlineData("", false)]
+    public void IsValidName_Cases(string name, bool expected) => Assert.Equal(expected, HandoffTemplate.IsValidName(name));
+
+    [Fact] public void IsValidName_64Chars_IsTrue() => Assert.True(HandoffTemplate.IsValidName(new string('a', 64)));
+
+    [Fact] public void IsValidName_65Chars_IsFalse() => Assert.False(HandoffTemplate.IsValidName(new string('a', 65)));
+
+    [Fact]
+    public void BadNameMessage_MatchesSpec() =>
+        Assert.Equal("Name \"A b\" is not valid. Use lower-case letters, digits, \"-\" and \"_\", starting with a letter or digit, up to 64 characters.",
+            HandoffTemplate.BadNameMessage("A b"));
+}
