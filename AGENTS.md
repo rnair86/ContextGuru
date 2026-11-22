@@ -134,16 +134,18 @@ The most important section. Keep it current.
 ## Notes
 <!-- Human-owned. Anything you write here is never touched by re-runs of agents-md. -->
 - Work on 1 issue at a time
-- Use the Github tools to read the Issue from Github
+- Use the Github tools to read the Issue that are created in Github in Todo status  not from the spec/plan document 
 - When starting work on an issue move its status in github from `Todo` to `In Progress`
-- Develop the feature - Do not skip any step from the 5 step red-green-refactor cycle
+- When Implementiing the Task, Use superpowers:subagent-driven-development skill to spin up a subagent to do the implementation.
+- Develop the feature, Do not skip any step from the 5 step red-green-refactor cycle 
 - Thoroughly test the feature with unit tests and integration tests and fix any issues
-- Once the task is completed and properly tested, Submit a PR using your github tools
-- Once the PR is merged move the Issue to Done with the a retrospective comment which should include.
+- Check off the completed tasks in the Plan document once the task is completed and tested
+- Once the task is completed and properly tested and the doc updated, Checkin the changes and Submit a PR using your github tools
+- Once the PR is merged move the Issue to `Done` with the a retrospective comment which should include.
   1. A brief description of what was done
   2. Any changes from what was planned in the ticket
   3. Any issues faced during the implementation along with what was done to fix it
-- Ensure the Task is checked off in the Plan document
+
 ---
 <!-- Generated and maintained by agents-md (https://github.com/eugeniughelbur/agents-md).
      Content INSIDE `agents-md:begin/end` markers is refreshed on re-run, unless you edited it:
