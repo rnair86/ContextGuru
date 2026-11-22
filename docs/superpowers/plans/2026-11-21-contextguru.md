@@ -81,7 +81,7 @@ Input classes the spec implies but does not test directly. Each has a test in th
 **Interfaces:**
 - Produces: facts that later tasks read from `docs/spike.md`: package versions, SDK API names, per-agent command location, name form, argument syntax, MCP config path and format, marker comment placement, working test commands, the transaction-start decision, and the logging-sink decision.
 
-- [ ] **Step 1: Red. Write `docs/spike.md` as a checklist where every answer is `UNKNOWN`**
+- [x] **Step 1: Red. Write `docs/spike.md` as a checklist where every answer is `UNKNOWN`**
 
 One section per question from spec item 1, each with `Result: UNKNOWN`:
   1. Per agent (Claude Code, Codex, Cursor) on Windows: pass or fail for "a custom command passes the agent folder to a tool", MCP roots support, server working folder at start, command file location and name form, argument syntax, works without a prefix such as `/prompts:`, MCP config file path and format, where a marker comment can go.
@@ -92,21 +92,21 @@ One section per question from spec item 1, each with `Result: UNKNOWN`:
   6. Does Codex need TOML for its MCP config.
   7. Package versions to pin in `Directory.Packages.props`.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `rg -c "UNKNOWN" docs/spike.md`
 Expected: a count of 7 or more.
 
-- [ ] **Step 3: Green. Get package approval, then run the experiments**
+- [x] **Step 3: Green. Get package approval, then run the experiments**
 
 Ask the author to approve the package list. Build the throwaway server in `spike/` and a throwaway command in each agent that calls it with the agent folder. Fill every `UNKNOWN` with an observed result and, for each failing agent, the decision to drop it or rely on the roots and working-folder fallbacks. Add the exact versions as a table.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: `rg -c "UNKNOWN" docs/spike.md`
 Expected: `0` matches (the command prints nothing or 0). At least two of three agents are marked pass. If fewer, stop and take the result to the author.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Ask the author before deleting `spike/`. Then update the Open Questions in `docs/designs/contextguru.md` to match the results and set Status as the author decides. Commit `docs/spike.md`, `.gitignore` and the design edit with "Record spike results".
 
