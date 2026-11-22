@@ -77,36 +77,36 @@ public sealed class SqliteContextStore(string dbPath, TimeProvider time) : ICont
             return new SaveResult(finalName, previousSummary is not null, previousUpdatedAt, previousSummary);
         });
 
-    public ContextRecord? GetLatest(ProjectInfo project)
-    {
-        using var c = Migrations.Open(dbPath);
-        using var cmd = new SqliteCommand($"SELECT {RecordColumns} FROM contexts WHERE project_key = @key ORDER BY updated_at DESC, id DESC LIMIT 1", c);
-        cmd.Parameters.AddWithValue("@key", project.Key);
-        return ReadRecord(cmd);
-    }
-
-    public ContextRecord? Get(ProjectInfo project, string name)
-    {
-        using var c = Migrations.Open(dbPath);
-        using var cmd = new SqliteCommand($"SELECT {RecordColumns} FROM contexts WHERE project_key = @key AND name = @name", c);
-        cmd.Parameters.AddWithValue("@key", project.Key);
-        cmd.Parameters.AddWithValue("@name", name);
-        return ReadRecord(cmd);
-    }
-
-    public IReadOnlyList<ContextListItem> List(ProjectInfo project)
-    {
-        using var c = Migrations.Open(dbPath);
-        using var cmd = new SqliteCommand("SELECT name, summary, updated_at, source_agent FROM contexts WHERE project_key = @key ORDER BY updated_at DESC, id DESC", c);
-        cmd.Parameters.AddWithValue("@key", project.Key);
-        using var r = cmd.ExecuteReader();
-        var items = new List<ContextListItem>();
-        while (r.Read())
+    public ContextRecord? GetLatest(ProjectInfo project) =>
+        ExecuteRead(c =>
         {
-            items.Add(new ContextListItem(r.GetString(0), r.GetString(1), Parse(r.GetString(2)), r.IsDBNull(3) ? null : r.GetString(3)));
-        }
-        return items;
-    }
+            using var cmd = new SqliteCommand($"SELECT {RecordColumns} FROM contexts WHERE project_key = @key ORDER BY updated_at DESC, id DESC LIMIT 1", c);
+            cmd.Parameters.AddWithValue("@key", project.Key);
+            return ReadRecord(cmd);
+        });
+
+    public ContextRecord? Get(ProjectInfo project, string name) =>
+        ExecuteRead(c =>
+        {
+            using var cmd = new SqliteCommand($"SELECT {RecordColumns} FROM contexts WHERE project_key = @key AND name = @name", c);
+            cmd.Parameters.AddWithValue("@key", project.Key);
+            cmd.Parameters.AddWithValue("@name", name);
+            return ReadRecord(cmd);
+        });
+
+    public IReadOnlyList<ContextListItem> List(ProjectInfo project) =>
+        ExecuteRead(c =>
+        {
+            using var cmd = new SqliteCommand("SELECT name, summary, updated_at, source_agent FROM contexts WHERE project_key = @key ORDER BY updated_at DESC, id DESC", c);
+            cmd.Parameters.AddWithValue("@key", project.Key);
+            using var r = cmd.ExecuteReader();
+            var items = new List<ContextListItem>();
+            while (r.Read())
+            {
+                items.Add(new ContextListItem(r.GetString(0), r.GetString(1), Parse(r.GetString(2)), r.IsDBNull(3) ? null : r.GetString(3)));
+            }
+            return (IReadOnlyList<ContextListItem>)items;
+        });
 
     public ContextRecord? Remove(ProjectInfo project, string name) =>
         ExecuteWrite((c, tx) =>
@@ -118,15 +118,22 @@ public sealed class SqliteContextStore(string dbPath, TimeProvider time) : ICont
         });
 
     /// <summary>Runs one short write transaction. BeginTransaction takes the write lock at BEGIN.</summary>
-    T ExecuteWrite<T>(Func<SqliteConnection, SqliteTransaction, T> work)
-    {
-        try
+    T ExecuteWrite<T>(Func<SqliteConnection, SqliteTransaction, T> work) =>
+        ExecuteRead(c =>
         {
-            using var c = Migrations.Open(dbPath);
             using var tx = c.BeginTransaction();
             var result = work(c, tx);
             tx.Commit();
             return result;
+        });
+
+    /// <summary>Runs work on a new connection and maps busy and locked errors (codes 5 and 6) to DatabaseBusyException.</summary>
+    T ExecuteRead<T>(Func<SqliteConnection, T> work)
+    {
+        try
+        {
+            using var c = Migrations.Open(dbPath);
+            return work(c);
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode is 5 or 6)
         {

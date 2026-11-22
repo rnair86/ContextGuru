@@ -99,6 +99,33 @@ public sealed class SqliteContextStoreTests : IDisposable
     }
 
     [Fact]
+    public void Reads_WhileAnotherConnectionHoldsExclusiveLock_ThrowDatabaseBusy()
+    {
+        store.Save(P, "auth", "s", Body, null);
+        // In WAL, readers are not blocked by a writer. An exclusive-mode connection that has written does block them.
+        using var holder = Migrations.Open(db);
+        Exec(holder, "PRAGMA locking_mode=EXCLUSIVE");
+        Exec(holder, "BEGIN IMMEDIATE");
+        Exec(holder, "UPDATE contexts SET summary = 'x'");
+        try
+        {
+            Assert.Throws<DatabaseBusyException>(() => store.GetLatest(P));
+            Assert.Throws<DatabaseBusyException>(() => store.Get(P, "auth"));
+            Assert.Throws<DatabaseBusyException>(() => store.List(P));
+        }
+        finally
+        {
+            Exec(holder, "ROLLBACK");
+        }
+    }
+
+    static void Exec(SqliteConnection c, string sql)
+    {
+        using var cmd = new SqliteCommand(sql, c);
+        cmd.ExecuteNonQuery();
+    }
+
+    [Fact]
     public void Get_FoundAndNotFound()
     {
         store.Save(P, "auth", "s", Body, null);
