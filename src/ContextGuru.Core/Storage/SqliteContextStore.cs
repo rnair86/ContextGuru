@@ -17,14 +17,21 @@ public sealed class SqliteContextStore(string dbPath, TimeProvider time) : ICont
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ContextGuru", "contexts.db")
             : envOverride;
 
+        // A bare file name has an empty folder: the current folder already exists.
         var folder = Path.GetDirectoryName(path)!;
         if (OperatingSystem.IsWindows())
         {
-            Directory.CreateDirectory(folder);
+            if (folder.Length > 0)
+            {
+                Directory.CreateDirectory(folder);
+            }
         }
         else
         {
-            Directory.CreateDirectory(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            if (folder.Length > 0)
+            {
+                Directory.CreateDirectory(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
             if (!File.Exists(path))
             {
                 using var _ = new FileStream(path, new FileStreamOptions

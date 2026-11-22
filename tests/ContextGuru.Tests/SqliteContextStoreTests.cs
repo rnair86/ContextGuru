@@ -196,6 +196,12 @@ public sealed class SqliteContextStoreTests : IDisposable
     }
 
     [Fact]
+    public void ResolveDatabasePath_BareFileName_ReturnsItUnchanged()
+    {
+        Assert.Equal("handoffs.db", SqliteContextStore.ResolveDatabasePath("handoffs.db"));
+    }
+
+    [Fact]
     public void ResolveDatabasePath_NewFolder_WorksEndToEnd()
     {
         var path = SqliteContextStore.ResolveDatabasePath(Path.Combine(t.Path, "x", "y", "c.db"));
