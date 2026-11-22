@@ -139,6 +139,74 @@ public sealed class SqliteContextStoreTests : IDisposable
     }
 
     [Fact]
+    public void GetLatestAndList_EqualUpdatedAt_HigherIdFirst()
+    {
+        time.Now = T0;
+        store.Save(P, "a", "s", Body, null);
+        store.Save(P, "b", "s", Body, null);
+        store.Save(P, "c", "s", Body, null);
+        Assert.Equal("c", store.GetLatest(P)!.Name);
+        Assert.Equal(["c", "b", "a"], store.List(P).Select(i => i.Name));
+    }
+
+    [Fact]
+    public void GetLatestAndList_EqualUpdatedAt_HigherIdFirst_WithoutIndex()
+    {
+        // The contexts_latest index already orders ties by id DESC. Dropping it proves the query itself does.
+        time.Now = T0;
+        store.Save(P, "a", "s", Body, null);
+        store.Save(P, "b", "s", Body, null);
+        store.Save(P, "c", "s", Body, null);
+        using (var c = Migrations.Open(db))
+        {
+            Exec(c, "DROP INDEX contexts_latest");
+        }
+        Assert.Equal("c", store.GetLatest(P)!.Name);
+        Assert.Equal(["c", "b", "a"], store.List(P).Select(i => i.Name));
+    }
+
+    [Fact]
+    public void GetLatest_IgnoresNewerRowInAnotherProject()
+    {
+        time.Now = T0;
+        store.Save(P, "mine", "s", Body, null);
+        time.Now = T0.AddHours(1);
+        store.Save(Q, "theirs", "s", Body, null);
+        Assert.Equal("mine", store.GetLatest(P)!.Name);
+        Assert.Equal("theirs", store.GetLatest(Q)!.Name);
+    }
+
+    [Fact]
+    public void Save_Overwrite_ReportsPreviousUpdatedAtNotCreatedAt_AndReplacesBody()
+    {
+        time.Now = T0;
+        store.Save(P, "auth", "s1", "old body", null);
+        time.Now = T0.AddMinutes(5);
+        store.Save(P, "auth", "s2", "middle body", null);
+        time.Now = T0.AddMinutes(10);
+        var third = store.Save(P, "auth", "s3", "new body", null);
+        Assert.Equal((T0.AddMinutes(5), "s2"), (third.PreviousUpdatedAt, third.PreviousSummary));
+        Assert.Equal("new body", store.Get(P, "auth")!.Body);
+        using var c = Migrations.Open(db);
+        using var cmd = new SqliteCommand("SELECT count(*) FROM contexts WHERE body <> 'new body'", c);
+        Assert.Equal(0L, cmd.ExecuteScalar());
+    }
+
+    [Fact]
+    public void Save_StoresUtcMillisecondTextAndTruncatesTicks()
+    {
+        // 12:30:05.1239999 at +02:00 is 10:30:05.123 UTC after truncation.
+        time.Now = new DateTimeOffset(2026, 11, 21, 12, 30, 5, TimeSpan.FromHours(2)).AddTicks(1239999);
+        store.Save(P, "auth", "s", Body, null);
+        using var c = Migrations.Open(db);
+        using var cmd = new SqliteCommand("SELECT created_at, updated_at FROM contexts", c);
+        using var r = cmd.ExecuteReader();
+        Assert.True(r.Read());
+        Assert.Equal(("2026-11-21T10:30:05.123Z", "2026-11-21T10:30:05.123Z"), (r.GetString(0), r.GetString(1)));
+        Assert.Matches(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$", r.GetString(0));
+    }
+
+    [Fact]
     public void Get_FoundAndNotFound()
     {
         store.Save(P, "auth", "s", Body, null);
