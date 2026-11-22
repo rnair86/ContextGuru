@@ -135,7 +135,7 @@ public sealed record SaveResult(string Name, bool Overwritten, DateTimeOffset? P
 public sealed record ValidationError(string Field, string Message);
 ```
 
-- [ ] **Step 1: Red. Scaffold and write the test**
+- [x] **Step 1: Red. Scaffold and write the test**
 
 Create the three projects and the slnx with `dotnet new` and `dotnet sln add` (follow the scaffold-dotnet-test-project skill: use the xUnit generation chosen in the spike, delete the template sample test, reference Core and the tool project from the test project, no package versions in csprojs because `Directory.Packages.props` supplies them). Write `ModelsTests`:
 
@@ -151,21 +151,21 @@ Create the three projects and the slnx with `dotnet new` and `dotnet sln add` (f
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet build ContextGuru.slnx -c Release`
 Expected: FAIL with CS0246 for `ProjectSource` and `SaveResult`.
 
-- [ ] **Step 3: Green. Add the records and the build files**
+- [x] **Step 3: Green. Add the records and the build files**
 
 Write `ContextRecord.cs` exactly as the Interfaces block. Fill `Directory.Build.props` (items 4 of the spec: `net10.0`, nullable, implicit usings, `AnalysisLevel`, `TreatWarningsAsErrors`, `WarningsNotAsErrors` NU1901 to NU1904), `global.json` (10.0.x, `rollForward` `latestFeature`), `Directory.Packages.props` (`ManagePackageVersionsCentrally` true and the versions from `docs/spike.md`), `.editorconfig` (indentation, file-scoped namespaces, `var` use). Tool csproj: `PackAsTool` true, `ToolCommandName` `contextguru`, `PackageId` `ContextGuru`, `Version` `0.1.0`, references to Core, `ModelContextProtocol`, `Microsoft.Extensions.Hosting`, `Serilog.Extensions.Hosting`, `Serilog.Sinks.File`. Core csproj references `Microsoft.Data.Sqlite` only.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: `dotnet build ContextGuru.slnx -c Release` then `dotnet test ContextGuru.slnx -c Release`
 Expected: build with 0 warnings, 2 tests pass.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Run `dotnet format ContextGuru.slnx` and `dotnet format ContextGuru.slnx --verify-no-changes` (exit 0). Commit: "Add solution skeleton and Core types".
 
