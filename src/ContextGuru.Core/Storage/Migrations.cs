@@ -45,7 +45,12 @@ public static class Migrations
         // First open: WAL is stored in the file, so it is set once, outside the transaction.
         if (ReadUserVersion(c) == 0)
         {
-            Exec(c, "PRAGMA journal_mode=WAL");
+            using var wal = new SqliteCommand("PRAGMA journal_mode=WAL", c);
+            var mode = (string)wal.ExecuteScalar()!;
+            if (!string.Equals(mode, "wal", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Could not enable WAL, journal mode is '{mode}'. The database must be on a local disk.");
+            }
         }
 
         // BeginTransaction issues BEGIN IMMEDIATE, so a second starter waits here and then finds nothing to do.

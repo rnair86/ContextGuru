@@ -101,6 +101,14 @@ public sealed partial class MigrationTests
     }
 
     [Fact]
+    public void Run_WalNotEnabled_Throws()
+    {
+        // An in-memory database cannot use WAL, so journal_mode stays "memory".
+        var ex = Assert.Throws<InvalidOperationException>(() => Migrations.Run(":memory:"));
+        Assert.Contains("memory", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Open_SetsBusyTimeout()
     {
         using var t = new TempDir();
