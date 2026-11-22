@@ -27,7 +27,8 @@ public static partial class HandoffTemplate
         else
         {
             // Report both problems so the agent's single retry can fix them together.
-            if (s.Contains('\n') || s.Contains('\r')) errors.Add(new("summary", "Summary must be one line."));
+            // The line check runs on the raw text so an edge newline is not trimmed away. Only the length uses trimmed text.
+            if (summary.Contains('\n') || summary.Contains('\r')) errors.Add(new("summary", "Summary must be one line."));
             if (s.Length > MaxSummaryLength) errors.Add(new("summary", $"Summary is {s.Length} characters; the maximum is {MaxSummaryLength}."));
         }
 
@@ -39,7 +40,7 @@ public static partial class HandoffTemplate
         }
         if (b.Length > MaxBodyLength) errors.Add(new("body", $"Body is {b.Length} characters; the maximum is {MaxBodyLength}."));
 
-        var found = ParseHeadings(b).Select(h => Array.FindIndex(Required, r => r.Equals(h.Text, StringComparison.OrdinalIgnoreCase)))
+        var found = ParseHeadings(body).Select(h => Array.FindIndex(Required, r => r.Equals(h.Text, StringComparison.OrdinalIgnoreCase)))
             .Where(i => i >= 0).ToList();
 
         foreach (var (name, i) in Required.Select((n, i) => (n, i)))
@@ -62,8 +63,8 @@ public static partial class HandoffTemplate
 
     public static bool NextStepsHasContent(string body)
     {
-        var lines = SplitLines(body.Trim());
-        var headings = ParseHeadings(body.Trim());
+        var lines = SplitLines(body);
+        var headings = ParseHeadings(body);
         var next = headings.FirstOrDefault(h => h.Text.Equals("Next steps", StringComparison.OrdinalIgnoreCase));
         if (next is null) return false;
 

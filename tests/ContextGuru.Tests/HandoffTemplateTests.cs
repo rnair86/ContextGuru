@@ -68,6 +68,18 @@ public class HandoffTemplateTests
     public void Validate_SummaryWithNewline_Reports() =>
         Assert.Equal(["Summary must be one line."], Messages("a\nb", Valid));
 
+    // The spec forbids CR and LF in the summary. Only the length is counted on trimmed text.
+    [Theory]
+    [InlineData("ready\r\n")]
+    [InlineData("\nready")]
+    public void Validate_SummaryWithEdgeNewline_Reports(string summary) =>
+        Assert.Equal(["Summary must be one line."], Messages(summary, Valid));
+
+    // A heading is a line that starts with "## ". Leading spaces are not trimmed away.
+    [Fact]
+    public void Validate_IndentedFirstHeading_IsNotAHeading() =>
+        Assert.Contains(Messages("s", "  " + Valid), m => m.StartsWith("Missing required heading: \"## Goal\"", StringComparison.Ordinal));
+
     [Fact]
     public void Validate_MultiLineSummaryOver200_ReportsBothProblems() =>
         Assert.Equal(["Summary must be one line.", "Summary is 301 characters; the maximum is 200."], Messages(new string('a', 150) + "\n" + new string('b', 150), Valid));
