@@ -103,6 +103,12 @@ Confirmed by the spike (details in `docs/spike.md`):
 - Codex commands are skills (`.agents/skills/<name>/SKILL.md`, run as `$<name>`), not `/name` prompts. Cursor and Claude Code use `/name` command files. Codex and Cursor have no argument placeholder, so a command body must say exactly what to pass to the tool.
 - Codex MCP config is TOML (`~/.codex/config.toml`). No TOML package is needed. Decide in Task 13 between `codex mcp add` and a text append.
 
+Learned while building Tasks 2 and 3:
+
+- `.editorconfig` sets `end_of_line = crlf`. `sed -i` or a file copy can flip a file to LF and `dotnet format --verify-no-changes` then fails with ENDOFLINE. Run `dotnet format ContextGuru.slnx` to fix it.
+- Edit C# with the editor tool, not a script. Python heredocs and shell quoting mangle backslash escapes such as `\n` inside string literals.
+- A test that must exercise a link can use a junction on Windows (`mklink /J`), which needs no privilege. Check such a test by disabling the feature and confirming the test fails.
+
 Carried over from the design:
 
 - WAL needs a local disk. Network or synced folders can corrupt the database.
