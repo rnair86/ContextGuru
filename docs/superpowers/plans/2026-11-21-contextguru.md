@@ -194,7 +194,7 @@ public static class HandoffTemplate
 }
 ```
 
-- [ ] **Step 1: Red. Write the tests**
+- [x] **Step 1: Red. Write the tests**
 
 ```csharp
 const string Valid = "## Goal\nG\n## Done\nD\n## Decisions\nX\n## Open tasks\nO\n## Next steps\nN\n";
@@ -224,21 +224,21 @@ const string Valid = "## Goal\nG\n## Done\nD\n## Decisions\nX\n## Open tasks\nO\
 
 Also, each as its own `[Fact]` or `[Theory]` with the exact outcome: extra level-two headings allowed; `###` headings do not count; padded and mixed-case heading (`"##  goal  "`) accepted; `\r\n` body accepted; summary `""` gives `Summary is empty.`; 200 chars ok; 201 chars gives `Summary is 201 characters; the maximum is 200.`; summary with `\n` gives `Summary must be one line.`; body `""` gives `Body is empty.`; 20,000 ok; 20,001 gives `Body is 20001 characters; the maximum is 20000.`; `NextStepsHasContent` false for `none`, `n/a`, `- none`, `* N/A.`, `None.`, empty and true for `Run the tests`; `NormalizeName("  Auth-Refactor ")` is `auth-refactor`; `IsValidName` true for a 64-char name and false for 65 chars, `-x`, `a b`, `café`, `""`; `BadNameMessage("A b")` is `Name "A b" is not valid. Use lower-case letters, digits, "-" and "_", starting with a letter or digit, up to 64 characters.`
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~HandoffTemplateTests"`
 Expected: FAIL to build, `HandoffTemplate` does not exist.
 
-- [ ] **Step 3: Green. Implement `HandoffTemplate`**
+- [x] **Step 3: Green. Implement `HandoffTemplate`**
 
 One pass over lines with a fence flag, splitting on `\r?\n`. Fence opens on a line starting with ``` or ~~~ and closes on the same marker. Collect level-two headings (line starts `## `, trimmed text compared case-insensitively) outside fences, then check missing, duplicate and order, then sections for `NextStepsHasContent`. Messages are exactly the spec table, numbers from the constants.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS, all tests in `HandoffTemplateTests`.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Extract the line scan into a private `ParseHeadings(string body)` shared by `Validate` and `NextStepsHasContent`. Run the class tests again, then `dotnet format`. Commit: "Add handoff template checker".
 
