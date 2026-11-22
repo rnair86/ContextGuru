@@ -34,8 +34,10 @@ public static class ProjectResolver
         var isWindows = OperatingSystem.IsWindows();
         var key = MakeKey(root, isWindows);
         var isFilesystemRoot = Path.GetPathRoot(root) == root;
-        var home = ResolveRealPath(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
-        var warning = isFilesystemRoot || key == MakeKey(home, isWindows) ? HomeWarning : null;
+        // The profile folder can be empty when the OS does not report one.
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var isHome = profile.Length > 0 && key == MakeKey(ResolveRealPath(profile), isWindows);
+        var warning = isFilesystemRoot || isHome ? HomeWarning : null;
         // A filesystem root has no folder name, so the root path is the name.
         var name = isFilesystemRoot ? root : Path.GetFileName(root);
         return new ProjectInfo(name, root, key, source, warning);
