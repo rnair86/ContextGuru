@@ -88,6 +88,11 @@ public class ServerHostTests
         await AssertInitializeResult(p);
         await Task.Delay(500);
         Assert.False(p.HasExited);
+
+        // The startup migration really ran and faulted: its failure is logged.
+        p.StandardInput.Close();
+        var exit = await p.WaitForExitAsync();
+        Assert.Contains("Migration failed", exit.Stderr);
     }
 
     [Fact]
