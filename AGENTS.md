@@ -24,12 +24,12 @@ How to format replies. The reader works in a terminal and finds dense walls of t
 ## Overview
 ContextGuru is a local MCP server (C#, .NET 10, stdio) that stores short coding-agent handoffs in a shared SQLite file, so work saved in Claude Code, Codex or Cursor can be read back in any of them. Four tools (save, get, list, remove) are called by four commands: `/cg-save-context [name]`, `/cg-get-context [name]`, `/cg-list-contexts`, `/cg-remove-context {name}`. It ships as a `dotnet tool` built locally.
 
-Status: design approved, spike done (Task 0), no source code yet. The source of truth is `docs/designs/contextguru.md` (Status: Approved). Spike results are in `docs/spike.md`. The task list is `docs/superpowers/plans/2026-11-21-contextguru.md`, one GitHub issue per task. Next is Task 1, the skeleton.
+Status: design approved, spike done, Tasks 0 to 3 done (skeleton, `HandoffTemplate`, `ProjectResolver`). The source of truth is `docs/designs/contextguru.md` (Status: Approved). Spike results are in `docs/spike.md`. The task list is `docs/superpowers/plans/2026-11-21-contextguru.md`, one GitHub issue per task. Next is Task 4, migrations and storage exceptions.
 <!-- agents-md:end id=overview -->
 
 <!-- agents-md:begin id=commands -->
 ## Commands
-No code exists yet. These are the planned commands from the design's Verification Plan. Check they exist before running.
+Build, test and format work today. The run, doctor, install and `local/` commands are planned (design's Verification Plan), so check they exist before running them.
 
 - Install: `dotnet restore`
 - Dev / run: `contextguru` (MCP stdio server), `contextguru --doctor` (diagnostics)
@@ -45,7 +45,7 @@ The spike confirmed the plain `dotnet test` forms above. `dotnet test --solution
 
 <!-- agents-md:begin id=testing -->
 ## Testing
-Planned: xUnit v2 (`xunit` 2.9.3, what `dotnet new xunit` produces) in `tests/ContextGuru.Tests`. Core tests use a temporary SQLite file. Stdio tests start the built tool and drive it with an MCP client. All tests run on Windows. Linux and macOS are not tested in v1. Build, tests and format check must pass before a change is done. Warnings are errors.
+xUnit v2 (`xunit` 2.9.3) in `tests/ContextGuru.Tests`, 78 tests so far. `TempDir` gives each test a throwaway folder. xUnit v2 has no dynamic skip, so a test that cannot set up (for example no link can be made) must fail, not return. Planned: Core store tests use a temporary SQLite file, and stdio tests start the built tool and drive it with an MCP client. All tests run on Windows. Linux and macOS are not tested in v1. Build, tests and format check must pass before a change is done. Warnings are errors.
 <!-- agents-md:end id=testing -->
 
 <!-- agents-md:begin id=structure -->
@@ -59,11 +59,16 @@ Current layout:
 - `docs/spike.md`: observed spike results (agents, MCP SDK, SQLite, packages). Later tasks read their values from here
 - `docs/superpowers/plans/2026-11-21-contextguru.md`: the implementation plan, tasks 0 to 15
 
-Planned layout (from the design):
+Code layout. Built so far:
 
-- `src/ContextGuru.Core`: class library, no MCP references (project resolver, handoff template checker, `IContextStore`, SQLite store, migrations)
-- `src/ContextGuru`: console app packaged as a `dotnet tool` (MCP host, four tools, doctor, installer, command file templates)
-- `tests/ContextGuru.Tests`: xUnit tests
+- `src/ContextGuru.Core`: class library, no MCP references. Has `Models/` (records), `Template/HandoffTemplate.cs` and `Projects/ProjectResolver.cs`
+- `src/ContextGuru`: console app, still only `Program.cs`
+- `tests/ContextGuru.Tests`: xUnit tests plus the `TempDir` helper
+
+Planned (from the design):
+
+- In Core: `IContextStore`, the SQLite store, migrations
+- In `src/ContextGuru`: MCP host, four tools, doctor, installer, command file templates, packaged as a `dotnet tool`
 - `local/`: `build.ps1` and `install.ps1`
 - `spike/`: git-ignored scratch folder (the Task 0 spike code is already deleted)
 <!-- agents-md:end id=structure -->
@@ -97,6 +102,12 @@ Confirmed by the spike (details in `docs/spike.md`):
 - Only Claude Code supports MCP roots. Codex and Cursor start the server in the project folder, so `projectPath` and the working folder cover them.
 - Codex commands are skills (`.agents/skills/<name>/SKILL.md`, run as `$<name>`), not `/name` prompts. Cursor and Claude Code use `/name` command files. Codex and Cursor have no argument placeholder, so a command body must say exactly what to pass to the tool.
 - Codex MCP config is TOML (`~/.codex/config.toml`). No TOML package is needed. Decide in Task 13 between `codex mcp add` and a text append.
+
+Learned while building Tasks 2 and 3:
+
+- `.editorconfig` sets `end_of_line = crlf`. `sed -i` or a file copy can flip a file to LF and `dotnet format --verify-no-changes` then fails with ENDOFLINE. Run `dotnet format ContextGuru.slnx` to fix it.
+- Edit C# with the editor tool, not a script. Python heredocs and shell quoting mangle backslash escapes such as `\n` inside string literals.
+- A test that must exercise a link can use a junction on Windows (`mklink /J`), which needs no privilege. Check such a test by disabling the feature and confirming the test fails.
 
 Carried over from the design:
 

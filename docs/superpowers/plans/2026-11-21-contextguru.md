@@ -222,7 +222,7 @@ const string Valid = "## Goal\nG\n## Done\nD\n## Decisions\nX\n## Open tasks\nO\
         e => e.Message.StartsWith("Missing required heading: \"## Done\""));
 ```
 
-Also, each as its own `[Fact]` or `[Theory]` with the exact outcome: extra level-two headings allowed; `###` headings do not count; padded and mixed-case heading (`"##  goal  "`) accepted; `\r\n` body accepted; summary `""` gives `Summary is empty.`; 200 chars ok; 201 chars gives `Summary is 201 characters; the maximum is 200.`; summary with `\n` gives `Summary must be one line.`; body `""` gives `Body is empty.`; 20,000 ok; 20,001 gives `Body is 20001 characters; the maximum is 20000.`; `NextStepsHasContent` false for `none`, `n/a`, `- none`, `* N/A.`, `None.`, empty and true for `Run the tests`; `NormalizeName("  Auth-Refactor ")` is `auth-refactor`; `IsValidName` true for a 64-char name and false for 65 chars, `-x`, `a b`, `café`, `""`; `BadNameMessage("A b")` is `Name "A b" is not valid. Use lower-case letters, digits, "-" and "_", starting with a letter or digit, up to 64 characters.`
+Also, each as its own `[Fact]` or `[Theory]` with the exact outcome: extra level-two headings allowed; `###` headings do not count; padded and mixed-case heading (`"##  goal  "`) accepted; `\r\n` body accepted; summary `""` gives `Summary is empty.`; 200 chars ok; 201 chars gives `Summary is 201 characters; the maximum is 200.`; summary with `\n` gives `Summary must be one line.` (checked on the untrimmed text, so an edge newline counts, and reported together with the length error); body `""` gives `Body is empty.` plus a missing-heading error for each of the five headings; 20,000 ok; 20,001 gives `Body is 20001 characters; the maximum is 20000.`; `NextStepsHasContent` false for `none`, `n/a`, `- none`, `* N/A.`, `None.`, empty and true for `Run the tests` (the whole trimmed section is judged, so `none` and `n/a` on separate lines or `-- none` count as content); `NormalizeName("  Auth-Refactor ")` is `auth-refactor`; `IsValidName` true for a 64-char name and false for 65 chars, `-x`, `a b`, `café`, `""`; `BadNameMessage("A b")` is `Name "A b" is not valid. Use lower-case letters, digits, "-" and "_", starting with a letter or digit, up to 64 characters.`
 
 - [x] **Step 2: Verify red**
 
@@ -231,7 +231,7 @@ Expected: FAIL to build, `HandoffTemplate` does not exist.
 
 - [x] **Step 3: Green. Implement `HandoffTemplate`**
 
-One pass over lines with a fence flag, splitting on `\r?\n`. Fence opens on a line starting with ``` or ~~~ and closes on the same marker. Collect level-two headings (line starts `## `, trimmed text compared case-insensitively) outside fences, then check missing, duplicate and order, then sections for `NextStepsHasContent`. Messages are exactly the spec table, numbers from the constants.
+One pass over lines with a fence flag, splitting on `\r?\n`. Fence opens on a line starting with ``` or ~~~ and closes on the same marker. Collect level-two headings (line starts `## `, trimmed text compared case-insensitively) outside fences, then check missing, duplicate and order, then sections for `NextStepsHasContent`. Messages are exactly the spec table, numbers from the constants. Settled in review: a heading must start at column 0 (an indented `## Goal` is not a heading); order is judged on first occurrences, and a repeated heading that returns after a later section also gets an out-of-order error next to the duplicate error; an empty body still reports every missing heading.
 
 - [x] **Step 4: Verify green**
 
@@ -296,7 +296,7 @@ Expected: FAIL to build, `ProjectResolver` does not exist.
 
 - [x] **Step 3: Green. Implement per the spec's Project identity section**
 
-Source order argument, first root, working folder. Validate `projectPath` with `Path.IsPathFullyQualified` and `Directory.Exists`. Resolve links segment by segment with `FileSystemInfo.ResolveLinkTarget(returnFinalTarget: true)`. Walk up with `Directory.Exists(.git) || File.Exists(.git)`, no `git` process. `MakeKey` takes `isWindows` as a parameter.
+Source order argument, first root, working folder. Validate `projectPath` with `Path.IsPathFullyQualified` and `Directory.Exists`. Resolve links segment by segment with `FileSystemInfo.ResolveLinkTarget(returnFinalTarget: true)`. Walk up with `Directory.Exists(.git) || File.Exists(.git)`, no `git` process. `MakeKey` takes `isWindows` as a parameter. Settled in review: trim a link target with `Path.TrimEndingDirectorySeparator` so a link to a filesystem root keeps its root; skip the home-folder check when the OS reports no profile folder; `RootPathsFromUris` keeps only strings that start with `file:`; the link tests fail, not pass quietly, when no link can be made (xUnit v2 has no dynamic skip). Known and deferred: on Unix, links inside a link target and `..` after a link are not resolved.
 
 - [x] **Step 4: Verify green**
 
