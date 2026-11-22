@@ -150,7 +150,7 @@ public class ProjectResolverTests
         Assert.Null(ProjectResolver.Resolve(t.Sub("repo"), [], t.Path).Warning);
     }
 
-    // Links need privileges on some systems, so the test falls back to a junction and passes quietly if neither can be made.
+    // Links can need privileges, so this falls back to a junction. A test that cannot make a link fails, since xUnit v2 has no dynamic skip.
     static bool TryLink(string link, string target)
     {
         try
@@ -173,7 +173,7 @@ public class ProjectResolverTests
         using var t = new TempDir();
         var target = t.Sub("real");
         var link = Path.Combine(t.Path, "link");
-        if (!TryLink(link, target)) return;
+        Assert.True(TryLink(link, target), "Could not create a link.");
         var p = ProjectResolver.Resolve(link, [], t.Path);
         Assert.Equal(target, p.Path);
     }
@@ -184,7 +184,7 @@ public class ProjectResolverTests
         using var t = new TempDir();
         var child = t.Sub(Path.Combine("real", "child"));
         var link = Path.Combine(t.Path, "link");
-        if (!TryLink(link, Path.Combine(t.Path, "real"))) return;
+        Assert.True(TryLink(link, Path.Combine(t.Path, "real")), "Could not create a link.");
         var p = ProjectResolver.Resolve(Path.Combine(link, "child"), [], t.Path);
         Assert.Equal(child, p.Path);
     }
@@ -196,7 +196,7 @@ public class ProjectResolverTests
         using var t = new TempDir();
         var root = Path.GetPathRoot(t.Path)!;
         var link = Path.Combine(t.Path, "link");
-        if (!TryLink(link, root)) return;
+        Assert.True(TryLink(link, root), "Could not create a link.");
         try
         {
             var p = ProjectResolver.Resolve(link, [], t.Path);
