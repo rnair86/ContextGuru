@@ -265,7 +265,7 @@ public static class ProjectResolver
 }
 ```
 
-- [ ] **Step 1: Red. Write the tests (temp folders from `TempDir`)**
+- [x] **Step 1: Red. Write the tests (temp folders from `TempDir`)**
 
 ```csharp
 [Fact] public void Resolve_ArgumentBeatsRootsAndCwd()
@@ -289,21 +289,21 @@ public void MakeKey_Windows(string path, string key) => Assert.Equal(key, Projec
 
 Also: roots beat cwd (`Roots`); first of several roots wins; a subfolder resolves to the folder that holds `.git` (directory and also a `.git` file); no `.git` gives the starting folder; whitespace-only `projectPath` counts as not given; a relative path, a missing folder and a file path each throw `InvalidProjectPathException`; `RootPathsFromUris(["file:///C:/My%20Repo", "https://x"])` returns one path ending in `My Repo`; the user profile folder gives `Warning` equal to `Project root is the home folder or a filesystem root, so contexts are scoped to it.` and the same for `Path.GetPathRoot(...)`, whose `Name` is the root path itself; a normal repo has `Warning` null; a symlinked folder and a symlink in a parent folder resolve to the real path (create the link in the test; skip dynamically if the OS refuses); trailing-separator and mixed-case spellings of one folder give the same `Key` on Windows.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~ProjectResolverTests"`
 Expected: FAIL to build, `ProjectResolver` does not exist.
 
-- [ ] **Step 3: Green. Implement per the spec's Project identity section**
+- [x] **Step 3: Green. Implement per the spec's Project identity section**
 
 Source order argument, first root, working folder. Validate `projectPath` with `Path.IsPathFullyQualified` and `Directory.Exists`. Resolve links segment by segment with `FileSystemInfo.ResolveLinkTarget(returnFinalTarget: true)`. Walk up with `Directory.Exists(.git) || File.Exists(.git)`, no `git` process. `MakeKey` takes `isWindows` as a parameter.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS (symlink tests may report skipped, nothing fails).
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Split link resolution into a private `ResolveRealPath` and the walk into `FindProjectRoot`. Re-run the class tests, `dotnet format`. Commit: "Add project resolver".
 
