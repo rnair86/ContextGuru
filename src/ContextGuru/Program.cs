@@ -6,10 +6,16 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Serilog;
 
+if (args is ["--doctor"])
+{
+    var doctorDbPath = SqliteContextStore.GetDatabasePath(Environment.GetEnvironmentVariable("CONTEXTGURU_DB"));
+    return Doctor.Run(doctorDbPath, Directory.GetCurrentDirectory(), Console.Out);
+}
+
 if (args.Length > 0)
 {
-    // --doctor, install and uninstall are added in Tasks 9 and 12.
-    Console.Error.WriteLine("Usage: contextguru");
+    // install and uninstall are added in Task 12.
+    Console.Error.WriteLine("Usage: contextguru [--doctor]");
     return 2;
 }
 

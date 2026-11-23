@@ -10,12 +10,16 @@ public sealed class SqliteContextStore(string dbPath, TimeProvider time) : ICont
     const string TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fff'Z'";
     const string RecordColumns = "name, summary, body, source_agent, created_at, updated_at";
 
+    /// <summary>Returns the database path without creating any folders or files.</summary>
+    public static string GetDatabasePath(string? envOverride) =>
+        string.IsNullOrEmpty(envOverride)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ContextGuru", "contexts.db")
+            : envOverride;
+
     /// <summary>Returns the database path and creates its folder. On Unix the folder is 0700 and the empty file 0600.</summary>
     public static string ResolveDatabasePath(string? envOverride)
     {
-        var path = string.IsNullOrEmpty(envOverride)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ContextGuru", "contexts.db")
-            : envOverride;
+        var path = GetDatabasePath(envOverride);
 
         // A bare file name has an empty folder: the current folder already exists.
         var folder = Path.GetDirectoryName(path)!;
