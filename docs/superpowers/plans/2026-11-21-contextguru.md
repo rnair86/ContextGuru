@@ -634,7 +634,7 @@ public Task<CallToolResult> RemoveContext(McpServer server, string name, string?
 ```
 Roots: ask the client only if it advertises roots, convert with `ProjectResolver.RootPathsFromUris`, ignore a failed request.
 
-- [ ] **Step 1: Red. Write the tests**
+- [x] **Step 1: Red. Write the tests**
 
 ```csharp
 [Fact] public async Task List_EmptyProject_ReturnsEmptyArray_NotError()          // Review Focus 5
@@ -659,23 +659,25 @@ Roots: ask the client only if it advertises roots, convert with `ProjectResolver
 
 Also: list returns saved names newest first with `name`, `summary`, `updated_at`, `source_agent` and no `body` property; after remove the list shrinks by one and `remove` returns the deleted `summary`; a handoff text never appears in `logs/contextguru-*.log` after save, get, list and remove calls.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~StdioToolTests"`
 Expected: FAIL (`list_contexts` and `remove_context` not found).
 
-- [ ] **Step 3: Green. Implement the two tools and the roots lookup**
+- [x] **Step 3: Green. Implement the two tools and the roots lookup**
 
 `RemoveContext` trims first, then returns the required-name error before touching the store. Roots lookup lives in a private `GetRootPathsAsync(McpServer)` used by all four tools. Pass `Environment.CurrentDirectory` as the working folder.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Remove duplicated project resolution by routing all four tools through one private `ResolveProjectAsync`. Re-run, `dotnet format`. Commit: "Add list and remove tools".
+
+As built: the SDK marks its roots APIs obsolete (MCP9005), so `ContextTools.cs` and `StdioToolTests.cs` carry a file-level `#pragma warning disable MCP9005`. SDK 2.4.0 resolves roots inside the client's own call, so the "roots fail" and "roots never answered" tests use a raw JSON-RPC client. The server asks for roots with a 5 second timeout and treats a failed or hung request as no roots. `list_contexts` is marked read-only.
 
 ---
 
