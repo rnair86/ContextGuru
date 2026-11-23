@@ -138,6 +138,16 @@ public sealed partial class StdioToolTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SaveContext_Schema_RequiresSummaryAndBodyOnly()
+    {
+        await Call("get_context", new() { ["projectPath"] = _repo });
+        var tools = await _client!.ListToolsAsync(cancellationToken: Timeout());
+        var schema = tools.Single(t => t.Name == "save_context").JsonSchema;
+        var required = schema.GetProperty("required").EnumerateArray().Select(e => e.GetString()!).Order().ToArray();
+        Assert.Equal(["body", "summary"], required);
+    }
+
+    [Fact]
     public async Task Save_NullOrMissingSummaryAndBody_ReturnValidationMessages()
     {
         var nulls = await Call("save_context", new() { ["summary"] = null, ["body"] = null, ["projectPath"] = _repo });
@@ -146,9 +156,9 @@ public sealed partial class StdioToolTests : IAsyncLifetime
         Assert.Contains("Body is empty.", Text(nulls));
 
         var missing = await Call("save_context", new() { ["projectPath"] = _repo });
+        // The SDK rejects a missing required field itself, with its generic message.
         Assert.True(missing.IsError);
-        Assert.Contains("Summary is empty.", Text(missing));
-        Assert.Contains("Body is empty.", Text(missing));
+        Assert.StartsWith("An error occurred invoking 'save_context'", Text(missing));
     }
 
     [Fact]
