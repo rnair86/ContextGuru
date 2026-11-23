@@ -334,15 +334,20 @@ public sealed partial class StdioToolTests : IAsyncLifetime
     [Fact]
     public async Task List_ReturnsNewestFirst_MetadataOnly_NoBody()
     {
-        Json(await Call("save_context", new() { ["summary"] = "old", ["body"] = Valid, ["name"] = "older", ["agent"] = "codex", ["projectPath"] = _repo }));
+        // Insert a, b, c, then overwrite b last: newest first is b, c, a, which is neither insertion order nor its reverse.
+        Json(await Save("a", summary: "sa"));
         await Task.Delay(50);
-        Json(await Save("newer", summary: "new"));
+        Json(await Call("save_context", new() { ["summary"] = "sb", ["body"] = Valid, ["name"] = "b", ["agent"] = "codex", ["projectPath"] = _repo }));
+        await Task.Delay(50);
+        Json(await Save("c", summary: "sc"));
+        await Task.Delay(50);
+        Json(await Call("save_context", new() { ["summary"] = "sb2", ["body"] = Valid, ["name"] = "b", ["agent"] = "codex", ["projectPath"] = _repo }));
         var j = Json(await List());
         var items = j.GetProperty("contexts").EnumerateArray().ToArray();
-        Assert.Equal(["newer", "older"], items.Select(i => i.GetProperty("name").GetString()!).ToArray());
-        Assert.Equal("new", items[0].GetProperty("summary").GetString());
-        Assert.Equal(JsonValueKind.Null, items[0].GetProperty("source_agent").ValueKind);
-        Assert.Equal("codex", items[1].GetProperty("source_agent").GetString());
+        Assert.Equal(["b", "c", "a"], items.Select(i => i.GetProperty("name").GetString()!).ToArray());
+        Assert.Equal("sb2", items[0].GetProperty("summary").GetString());
+        Assert.Equal(JsonValueKind.Null, items[1].GetProperty("source_agent").ValueKind);
+        Assert.Equal("codex", items[0].GetProperty("source_agent").GetString());
         Assert.Matches(Timestamp(), items[0].GetProperty("updated_at").GetString()!);
         Assert.All(items, i => Assert.Equal(["name", "summary", "updated_at", "source_agent"], i.EnumerateObject().Select(p => p.Name).ToArray()));
     }
@@ -354,7 +359,8 @@ public sealed partial class StdioToolTests : IAsyncLifetime
         Json(await Save("b", summary: "sb"));
         Assert.Equal(2, Json(await List()).GetProperty("contexts").GetArrayLength());
 
-        var j = Json(await Remove("A"));
+        // Surrounding whitespace is trimmed and the name is lower-cased.
+        var j = Json(await Remove("  A  "));
         Assert.True(j.GetProperty("removed").GetBoolean());
         Assert.Equal("a", j.GetProperty("name").GetString());
         Assert.Equal("sa", j.GetProperty("summary").GetString());
@@ -368,13 +374,19 @@ public sealed partial class StdioToolTests : IAsyncLifetime
     public async Task Remove_WithoutName_IsError()
     {
         Json(await Save("keep"));
-        Assert.Equal("A name is required to remove a context.", Text(await Remove("  ")));
-        Assert.Equal("A name is required to remove a context.", Text(await Remove("")));
-        Assert.Equal("A name is required to remove a context.", Text(await Call("remove_context", new() { ["name"] = null, ["projectPath"] = _repo })));
-        // No name key at all: the tool must answer, not the SDK's generic rejection.
-        var missing = await Call("remove_context", new() { ["projectPath"] = _repo });
-        Assert.True(missing.IsError);
-        Assert.Equal("A name is required to remove a context.", Text(missing));
+        var results = new[]
+        {
+            await Remove("  "),
+            await Remove(""),
+            await Call("remove_context", new() { ["name"] = null, ["projectPath"] = _repo }),
+            // No name key at all: the tool must answer, not the SDK's generic rejection.
+            await Call("remove_context", new() { ["projectPath"] = _repo }),
+        };
+        Assert.All(results, r =>
+        {
+            Assert.True(r.IsError);
+            Assert.Equal("A name is required to remove a context.", Text(r));
+        });
         Assert.Equal(1, Json(await List()).GetProperty("contexts").GetArrayLength());
     }
 
@@ -409,6 +421,7 @@ public sealed partial class StdioToolTests : IAsyncLifetime
         foreach (var t in tools)
         {
             Assert.Equal(t.Name == "remove_context", t.ProtocolTool.Annotations?.DestructiveHint == true);
+            Assert.Equal(t.Name is "get_context" or "list_contexts", t.ProtocolTool.Annotations?.ReadOnlyHint == true);
         }
     }
 
@@ -460,22 +473,40 @@ public sealed partial class StdioToolTests : IAsyncLifetime
     [Fact]
     public async Task Get_RootsRequestFails_FallsBackToServerWorkingFolder()
     {
-        var source = await RawGetWithRootsAsync(answer: id => $$$"""{"jsonrpc":"2.0","id":{{{id}}},"error":{"code":-32603,"message":"no roots"}}""");
+        var (source, asked) = await RawGetAsync(advertiseRoots: true, projectPath: null, answer: id => $$$"""{"jsonrpc":"2.0","id":{{{id}}},"error":{"code":-32603,"message":"no roots"}}""");
+        Assert.Equal(1, asked);
         Assert.Equal("cwd", source);
     }
 
     [Fact]
     public async Task Get_RootsRequestNeverAnswered_TimesOutAndFallsBackToServerWorkingFolder()
     {
-        var source = await RawGetWithRootsAsync(answer: null);
+        var (source, asked) = await RawGetAsync(advertiseRoots: true, projectPath: null, answer: null);
+        Assert.Equal(1, asked);
+        Assert.Equal("cwd", source);
+    }
+
+    [Fact]
+    public async Task Get_WithProjectPath_DoesNotAskClientForRoots()
+    {
+        var (source, asked) = await RawGetAsync(advertiseRoots: true, projectPath: _repo, answer: null);
+        Assert.Equal(0, asked);
+        Assert.Equal("argument", source);
+    }
+
+    [Fact]
+    public async Task Get_ClientWithoutRootsCapability_DoesNotAskForRoots()
+    {
+        var (source, asked) = await RawGetAsync(advertiseRoots: false, projectPath: null, answer: null);
+        Assert.Equal(0, asked);
         Assert.Equal("cwd", source);
     }
 
     /// <summary>
     /// Speaks raw JSON-RPC on an older protocol version, because the SDK client resolves roots inside its own call and
-    /// cannot show a failed or silent client. Returns project.source from get_context without a projectPath.
+    /// cannot show a failed or silent client. Returns project.source from get_context and the number of roots/list requests the server sent.
     /// </summary>
-    async Task<string?> RawGetWithRootsAsync(Func<string, string>? answer)
+    async Task<(string? Source, int RootsRequests)> RawGetAsync(bool advertiseRoots, string? projectPath, Func<string, string>? answer)
     {
         var limit = TimeSpan.FromSeconds(30);
         _server = ServerProcess.Start(_db, workingFolder: _dir.Sub("work"));
@@ -488,13 +519,15 @@ public sealed partial class StdioToolTests : IAsyncLifetime
         async Task<JsonElement> Read() =>
             JsonDocument.Parse(await _server.ReadLineAsync(limit) ?? throw new InvalidOperationException("Server closed stdout.")).RootElement;
 
-        await Send("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"roots":{}},"clientInfo":{"name":"raw","version":"1"}}}""");
+        var capabilities = advertiseRoots ? """{"roots":{}}""" : "{}";
+        await Send("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":""" + capabilities + ""","clientInfo":{"name":"raw","version":"1"}}}""");
         var init = await Read();
         Assert.Equal(1, init.GetProperty("id").GetInt32());
         await Send("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
-        await Send("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_context","arguments":{"name":"x"}}}""");
+        var arguments = JsonSerializer.Serialize(new Dictionary<string, string?> { ["name"] = "x", ["projectPath"] = projectPath });
+        await Send("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_context","arguments":""" + arguments + "}}");
 
-        var sawRootsRequest = false;
+        var rootsRequests = 0;
         while (true)
         {
             var msg = await Read();
@@ -506,7 +539,7 @@ public sealed partial class StdioToolTests : IAsyncLifetime
                     continue;
                 }
                 Assert.Equal("roots/list", method.GetString());
-                sawRootsRequest = true;
+                rootsRequests++;
                 if (answer is not null)
                 {
                     await Send(answer(msg.GetProperty("id").GetRawText()));
@@ -514,9 +547,8 @@ public sealed partial class StdioToolTests : IAsyncLifetime
                 continue;
             }
             Assert.Equal(2, msg.GetProperty("id").GetInt32());
-            Assert.True(sawRootsRequest, "The server never asked for roots.");
             var text = msg.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
-            return JsonDocument.Parse(text).RootElement.GetProperty("project").GetProperty("source").GetString();
+            return (JsonDocument.Parse(text).RootElement.GetProperty("project").GetProperty("source").GetString(), rootsRequests);
         }
     }
 
@@ -552,6 +584,7 @@ public sealed partial class StdioToolTests : IAsyncLifetime
         var all = string.Concat(logs.Select(f => File.ReadAllText(f)));
         // The log must exist and hold the save line, so the check below cannot pass on an empty file.
         Assert.Contains("Saved context logtest", all);
+        Assert.Contains("Removed context logtest", all);
         Assert.DoesNotContain(marker, all);
         Assert.DoesNotContain(summaryMarker, all);
     }
