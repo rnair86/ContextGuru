@@ -1,5 +1,6 @@
 using ContextGuru;
 using ContextGuru.Core.Storage;
+using ContextGuru.Tools;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -28,11 +29,9 @@ catch (Exception e)
 // No default configuration sources: project settings and logging env overrides must not change the server.
 var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings { Args = args });
 ConfigureLogging(builder, dbPath);
-builder.Services.AddMcpServer().WithStdioServerTransport();
-if (dbPath is not null)
-{
-    builder.Services.AddSingleton(new SqliteContextStore(dbPath, TimeProvider.System));
-}
+builder.Services.AddMcpServer().WithStdioServerTransport().WithTools<ContextTools>();
+// Always registered so the tools can be built. With no usable path the store is never used: tools return the faulted migration first.
+builder.Services.AddSingleton<IContextStore>(new SqliteContextStore(dbPath ?? "", TimeProvider.System));
 builder.Services.AddSingleton(migration);
 
 var host = builder.Build();
