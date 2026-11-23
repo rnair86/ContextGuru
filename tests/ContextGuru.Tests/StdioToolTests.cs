@@ -135,6 +135,29 @@ public sealed partial class StdioToolTests : IDisposable
     }
 
     [Fact]
+    public async Task Save_BadNameBadHandoffAndBadProjectPath_ReturnsEveryLine()
+    {
+        var r = await Call("save_context", new() { ["summary"] = "s", ["body"] = "just text", ["name"] = "Bad Name", ["projectPath"] = "rel/path" });
+        Assert.True(r.IsError);
+        var lines = Text(r).Split('\n');
+        Assert.StartsWith("Name \"bad name\" is not valid.", lines[0]);
+        Assert.Equal(5, lines.Count(l => l.StartsWith("Missing required heading", StringComparison.Ordinal)));
+        Assert.Equal("projectPath must be an absolute path to an existing folder.", lines[^1]);
+        Assert.Equal(7, lines.Length);
+    }
+
+    [Fact]
+    public async Task Get_BadNameAndBadProjectPath_ReturnsBothLines()
+    {
+        var r = await Call("get_context", new() { ["name"] = "Bad Name", ["projectPath"] = "rel/path" });
+        Assert.True(r.IsError);
+        var lines = Text(r).Split('\n');
+        Assert.Equal(2, lines.Length);
+        Assert.StartsWith("Name \"bad name\" is not valid.", lines[0]);
+        Assert.Equal("projectPath must be an absolute path to an existing folder.", lines[1]);
+    }
+
+    [Fact]
     public async Task Get_Found_WrapsBodyWithMatchingRandomIds_AndExactInstructions()
     {
         Json(await Save());

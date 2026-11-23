@@ -39,12 +39,12 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
             List<string> problems = [];
             var normalized = NormalizeOptionalName(name, problems);
             problems.AddRange(HandoffTemplate.Validate(summary, body).Select(e => e.Message));
-            if (problems.Count > 0)
+            var project = TryResolveProject(projectPath, problems);
+            if (project is null || problems.Count > 0)
             {
                 return Task.FromResult(Results.Error(string.Join('\n', problems)));
             }
 
-            var project = ProjectResolver.Resolve(projectPath, [], Directory.GetCurrentDirectory());
             var saved = store.Save(project, normalized, summary.Trim(), body, string.IsNullOrWhiteSpace(agent) ? null : agent.Trim());
             Saved(log, saved.Name, project.Name, null);
             return Task.FromResult(Results.Ok(new SaveContextResult(
@@ -66,12 +66,12 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
         {
             List<string> problems = [];
             var normalized = NormalizeOptionalName(name, problems);
-            if (problems.Count > 0)
+            var project = TryResolveProject(projectPath, problems);
+            if (project is null || problems.Count > 0)
             {
-                return Task.FromResult(Results.Error(problems[0]));
+                return Task.FromResult(Results.Error(string.Join('\n', problems)));
             }
 
-            var project = ProjectResolver.Resolve(projectPath, [], Directory.GetCurrentDirectory());
             var record = normalized is null ? store.GetLatest(project) : store.Get(project, normalized);
             if (record is null)
             {
@@ -91,6 +91,21 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
                 ProjectResult.From(project),
                 AgentInstructions)));
         }, ct);
+
+    /// <summary>Returns null and adds the message when projectPath is bad, so it is reported with the other problems.</summary>
+    static ProjectInfo? TryResolveProject(string? projectPath, List<string> problems)
+    {
+        try
+        {
+            // Roots are not used yet.
+            return ProjectResolver.Resolve(projectPath, [], Directory.GetCurrentDirectory());
+        }
+        catch (InvalidProjectPathException e)
+        {
+            problems.Add(e.Message);
+            return null;
+        }
+    }
 
     /// <summary>An empty or whitespace name counts as not given. A bad name adds its message to problems.</summary>
     static string? NormalizeOptionalName(string? name, List<string> problems)
