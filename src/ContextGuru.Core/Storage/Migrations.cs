@@ -29,9 +29,9 @@ public static class Migrations
     public static int Latest => Steps.Length;
 
     /// <summary>Opens a new unpooled connection. A fresh connection has busy_timeout 0, so it is set here.</summary>
-    public static SqliteConnection Open(string dbPath)
+    public static SqliteConnection Open(string dbPath, SqliteOpenMode mode = SqliteOpenMode.ReadWriteCreate)
     {
-        var builder = new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false, DefaultTimeout = 5 };
+        var builder = new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = mode, Pooling = false, DefaultTimeout = 5 };
         var c = new SqliteConnection(builder.ConnectionString);
         c.Open();
         Exec(c, "PRAGMA busy_timeout=5000");

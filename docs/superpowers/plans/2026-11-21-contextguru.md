@@ -692,7 +692,7 @@ As built: the SDK marks its roots APIs obsolete (MCP9005), so `ContextTools.cs` 
 - Consumes: `Migrations.Open`, `Migrations.ReadUserVersion`, `ProjectResolver.Resolve`.
 - Produces: `public static class Doctor { public static int Run(string dbPath, string workingFolder, TextWriter output); }` returns 0 or 1.
 
-- [ ] **Step 1: Red. Write the tests**
+- [x] **Step 1: Red. Write the tests**
 
 ```csharp
 [Fact] public void Run_GoodDatabase_PrintsAllKeys_Exit0()
@@ -716,23 +716,25 @@ As built: the SDK marks its roots APIs obsolete (MCP9005), so `ContextTools.cs` 
 
 Also: `user_version` 99 prints a schema line containing `99` and `newer than this tool` without throwing; a second connection holding `BEGIN IMMEDIATE` makes `write test: failed` and exit code 1; a working folder with a `.git` folder prints `.git found: yes`, without one `no`; after a passing run the `contexts` table is still empty (rolled back).
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~DoctorTests"`
 Expected: FAIL to build, `Doctor` does not exist.
 
-- [ ] **Step 3: Green. Implement per the spec's Observability section**
+- [x] **Step 3: Green. Implement per the spec's Observability section**
 
 Version from the assembly informational version. Never call `Migrations.Run`. Open with `Migrations.Open` only if the file exists. The write test is `BEGIN IMMEDIATE` then `ROLLBACK`.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS (the failed-write case takes about 5 seconds).
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Make each check a small private method returning its `key: value` line so `Run` only joins them. Re-run, `dotnet format`. Commit: "Add doctor mode".
+
+As built: `SqliteContextStore.GetDatabasePath` was extracted so `--doctor` resolves `CONTEXTGURU_DB` without creating missing folders or files; a newer schema (`user_version > Migrations.Latest`) prints `(newer than this tool)` without throwing and exits 1.
 
 ---
 
