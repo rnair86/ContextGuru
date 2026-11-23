@@ -116,6 +116,8 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
             return Results.Error(e.Message);
         }
 
+        // A migration that was already complete does not observe ct, so check it before any write.
+        ct.ThrowIfCancellationRequested();
         try
         {
             return await work();
