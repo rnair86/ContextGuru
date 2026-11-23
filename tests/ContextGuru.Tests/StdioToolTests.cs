@@ -228,6 +228,28 @@ public sealed partial class StdioToolTests : IDisposable
     }
 
     [Fact]
+    public async Task Tools_WhenWriteLockHeldAtStartup_ReportBusy_ThenRetryMigrationAfterRelease()
+    {
+        Migrations.Run(_db);
+        using var holder = Migrations.Open(_db);
+        using (var begin = new SqliteCommand("BEGIN IMMEDIATE", holder))
+        {
+            begin.ExecuteNonQuery();
+        }
+
+        // The server's startup migration waits 5 s for the lock, then fails as busy.
+        var busy = await Get("auth");
+        Assert.True(busy.IsError);
+        Assert.Equal("Database busy, retry.", Text(busy));
+
+        using (var rollback = new SqliteCommand("ROLLBACK", holder))
+        {
+            rollback.ExecuteNonQuery();
+        }
+        Assert.True(Json(await Get("auth")).TryGetProperty("found", out _));
+    }
+
+    [Fact]
     public async Task Tools_WithUncreatableDatabaseFolder_ReturnStoredErrorAndServerStaysAlive()
     {
         var file = Path.Combine(_dir.Path, "afile");
