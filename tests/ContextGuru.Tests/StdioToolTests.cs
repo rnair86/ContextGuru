@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ContextGuru.Core.Storage;
@@ -8,7 +9,8 @@ using ModelContextProtocol.Protocol;
 
 namespace ContextGuru.Tests;
 
-public sealed partial class StdioToolTests : IDisposable
+[SuppressMessage("Usage", "CA1001", Justification = "The temp folder is deleted in DisposeAsync, after the server process is gone.")]
+public sealed partial class StdioToolTests : IAsyncLifetime
 {
     const string Valid = "## Goal\ng\n\n## Done\nd\n\n## Decisions\nx\n\n## Open tasks\no\n\n## Next steps\n- n\n";
 
@@ -16,6 +18,7 @@ public sealed partial class StdioToolTests : IDisposable
     readonly string _db;
     readonly string _repo;
     McpClient? _client;
+    ServerProcess? _server;
 
     public StdioToolTests()
     {
@@ -24,12 +27,34 @@ public sealed partial class StdioToolTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_repo, ".git"));
     }
 
-    public void Dispose()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
-        // The client owns the child process: disposing it ends the server.
-        _client?.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(10));
-        _dir.Dispose();
+        try
+        {
+            if (_client is not null)
+            {
+                await _client.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            }
+        }
+        catch (TimeoutException)
+        {
+            // Falls through: the process is killed below.
+        }
+        finally
+        {
+            // Kills the process tree if it is still running, then the folder can be deleted.
+            if (_server is not null)
+            {
+                await _server.DisposeAsync();
+            }
+            _dir.Dispose();
+        }
     }
+
+    [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")]
+    private static partial Regex Timestamp();
 
     [GeneratedRegex("^[0-9]{8}-[0-9]{6}$")]
     private static partial Regex AutoName();
@@ -42,7 +67,14 @@ public sealed partial class StdioToolTests : IDisposable
     async Task<CallToolResult> Call(string tool, Dictionary<string, object?> args, string? dbPath = null)
     {
         var ct = Timeout();
-        _client ??= await McpClient.CreateAsync(ServerProcess.Transport(dbPath ?? _db, _dir.Sub("work")), cancellationToken: ct);
+        if (_client is null)
+        {
+            // The test owns the process, so it can kill it on timeout. Stderr is drained so a full pipe cannot block the server.
+            _server = ServerProcess.Start(dbPath ?? _db, workingFolder: _dir.Sub("work"));
+            _ = _server.StandardError.ReadToEndAsync();
+            var transport = new StreamClientTransport(_server.StandardInput.BaseStream, _server.StandardOutput.BaseStream);
+            _client = await McpClient.CreateAsync(transport, cancellationToken: ct);
+        }
         return await _client.CallToolAsync(tool, args, cancellationToken: ct);
     }
 
@@ -81,7 +113,8 @@ public sealed partial class StdioToolTests : IDisposable
         var j = Json(await Save(summary: "second"));
         Assert.True(j.GetProperty("overwritten").GetBoolean());
         Assert.Equal("first", j.GetProperty("previous_summary").GetString());
-        Assert.Equal(JsonValueKind.String, j.GetProperty("previous_updated_at").ValueKind);
+        Assert.Matches(Timestamp(), j.GetProperty("previous_updated_at").GetString()!);
+        Assert.Equal(_repo, j.GetProperty("project").GetProperty("path").GetString());
     }
 
     [Fact]
@@ -129,7 +162,7 @@ public sealed partial class StdioToolTests : IDisposable
     [Fact]
     public async Task Save_RelativeProjectPath_IsError()
     {
-        var r = await Call("save_context", new() { ["summary"] = "s", ["body"] = Valid, ["projectPath"] = "rel/path" });
+        var r = await Call("save_context", new() { ["summary"] = "s", ["body"] = Valid, ["projectPath"] = "." });
         Assert.True(r.IsError);
         Assert.Equal("projectPath must be an absolute path to an existing folder.", Text(r));
     }
@@ -168,6 +201,9 @@ public sealed partial class StdioToolTests : IDisposable
         Assert.Equal("auth", first.GetProperty("name").GetString());
         Assert.Equal(ContextTools.AgentInstructions, first.GetProperty("agent_instructions").GetString());
         Assert.Equal("repo", first.GetProperty("project").GetProperty("name").GetString());
+        Assert.Equal(_repo, first.GetProperty("project").GetProperty("path").GetString());
+        Assert.Equal("s", first.GetProperty("summary").GetString());
+        Assert.Matches(Timestamp(), first.GetProperty("updated_at").GetString()!);
 
         var id1 = AssertWrapped(first.GetProperty("body").GetString()!, Valid);
         var id2 = AssertWrapped(second.GetProperty("body").GetString()!, Valid);
@@ -202,9 +238,12 @@ public sealed partial class StdioToolTests : IDisposable
         Json(await Save("older", summary: "old"));
         await Task.Delay(50);
         Json(await Save("newer", summary: "new"));
+        await Task.Delay(50);
+        // Overwriting keeps the row id, so the latest by update time differs from the latest by insertion.
+        Json(await Save("older", summary: "old again"));
         var j = Json(await Get());
-        Assert.Equal("newer", j.GetProperty("name").GetString());
-        Assert.Equal("new", j.GetProperty("summary").GetString());
+        Assert.Equal("older", j.GetProperty("name").GetString());
+        Assert.Equal("old again", j.GetProperty("summary").GetString());
     }
 
     [Fact]
@@ -225,9 +264,12 @@ public sealed partial class StdioToolTests : IDisposable
     [Fact]
     public async Task Get_Unknown_ReturnsNotFoundWithSearchedPath()
     {
+        // The project holds a different context, so a not-found answer is not just an empty database.
+        Json(await Save("other"));
         var j = Json(await Get("nope"));
         Assert.False(j.GetProperty("found").GetBoolean());
-        Assert.Equal(j.GetProperty("project").GetProperty("path").GetString(), j.GetProperty("searched_path").GetString());
+        Assert.Equal(_repo, j.GetProperty("project").GetProperty("path").GetString());
+        Assert.Equal(_repo, j.GetProperty("searched_path").GetString());
         Assert.False(j.TryGetProperty("body", out _));
     }
 
@@ -292,10 +334,11 @@ public sealed partial class StdioToolTests : IDisposable
         var file = Path.Combine(_dir.Path, "afile");
         await File.WriteAllTextAsync(file, "x");
         var bad = Path.Combine(file, "c.db");
+        // The same call the server makes at startup gives the message the tools must return.
+        var expected = Assert.ThrowsAny<Exception>(() => SqliteContextStore.ResolveDatabasePath(bad)).Message;
         var r = await Call("get_context", new() { ["projectPath"] = _repo }, bad);
         Assert.True(r.IsError);
-        Assert.False(string.IsNullOrWhiteSpace(Text(r)));
-        Assert.NotEqual("An error occurred invoking 'get_context'.", Text(r));
+        Assert.Equal(expected, Text(r));
         var again = await Call("save_context", new() { ["summary"] = "s", ["body"] = Valid, ["projectPath"] = _repo }, bad);
         Assert.True(again.IsError);
         Assert.Equal(Text(r), Text(again));
