@@ -105,6 +105,20 @@ public sealed partial class StdioToolTests : IDisposable
     }
 
     [Fact]
+    public async Task Save_NullOrMissingSummaryAndBody_ReturnValidationMessages()
+    {
+        var nulls = await Call("save_context", new() { ["summary"] = null, ["body"] = null, ["projectPath"] = _repo });
+        Assert.True(nulls.IsError);
+        Assert.Contains("Summary is empty.", Text(nulls));
+        Assert.Contains("Body is empty.", Text(nulls));
+
+        var missing = await Call("save_context", new() { ["projectPath"] = _repo });
+        Assert.True(missing.IsError);
+        Assert.Contains("Summary is empty.", Text(missing));
+        Assert.Contains("Body is empty.", Text(missing));
+    }
+
+    [Fact]
     public async Task Save_BadName_IsErrorWithBadNameText()
     {
         var r = await Save(name: "Bad Name");

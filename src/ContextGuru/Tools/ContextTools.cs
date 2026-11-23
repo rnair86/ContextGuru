@@ -25,14 +25,17 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
     [Description("Save a handoff for the current project so another coding agent can continue the work. Saving an existing name replaces it.")]
     public Task<CallToolResult> SaveContext(
         McpServer server,
-        [Description("One line, at most 200 characters.")] string summary,
-        [Description("Markdown with the level-two headings Goal, Done, Decisions, Open tasks, Next steps, in that order.")] string body,
+        [Description("One line, at most 200 characters.")] string? summary = null,
+        [Description("Markdown with the level-two headings Goal, Done, Decisions, Open tasks, Next steps, in that order.")] string? body = null,
         [Description("Optional name: lower-case letters, digits, '-' and '_'. Defaults to a timestamp.")] string? name = null,
         [Description("Optional name of the agent saving this, for example claude, codex or cursor.")] string? agent = null,
         [Description(ProjectPathHelp)] string? projectPath = null,
         CancellationToken ct = default) =>
         Guard(() =>
         {
+            // A missing or null argument is reported by the template as empty, not as a generic SDK error.
+            summary ??= "";
+            body ??= "";
             List<string> problems = [];
             var normalized = NormalizeOptionalName(name, problems);
             problems.AddRange(HandoffTemplate.Validate(summary, body).Select(e => e.Message));
