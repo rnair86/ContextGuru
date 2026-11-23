@@ -562,7 +562,7 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
 ```
 Success is one JSON text content block of the result record. An error is `CallToolResult { IsError = true }` with one text block. `AgentInstructions` is a public constant holding the exact spec text.
 
-- [ ] **Step 1: Red. Write the tests with the SDK client over `ServerProcess.Transport`**
+- [x] **Step 1: Red. Write the tests with the SDK client over `ServerProcess.Transport`**
 
 ```csharp
 [Fact] public async Task Save_NewContext_ReturnsWireShape()
@@ -590,23 +590,25 @@ Success is one JSON text content block of the result record. An error is `CallTo
 
 Also: second save of `auth` gives `overwritten: true` with `previous_summary`; no name gives a name matching `^\d{8}-\d{6}$`; `get` with no name returns the latest; `get` of an unknown name gives `found: false` with `searched_path` equal to `project.path`; a name `Bad Name` gives IsError with the Bad name text; a relative `projectPath` gives IsError `projectPath must be an absolute path to an existing folder.`; null fields appear as JSON `null` (property present); against a database with `user_version` 99 a tool call returns IsError with `The database schema is version 99, but this tool supports up to 1. Update this tool's install.` and the process stays alive.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~StdioToolTests"`
 Expected: FAIL (tool `save_context` not found on the server).
 
-- [ ] **Step 3: Green. Implement**
+- [x] **Step 3: Green. Implement**
 
 Each tool awaits `migration.Completion` (a stored fault becomes the tool error), normalizes the name with `HandoffTemplate.NormalizeName`, resolves the project with roots left empty for now, calls the store, and maps `ValidationError`, `InvalidProjectPathException`, `DatabaseBusyException` and `SchemaTooNewException` to error results using the spec's message table. Delimiter id: `Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant()`.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Move the exception-to-result mapping into one private `Guard(Func<Task<CallToolResult>>)`. Re-run, `dotnet format`. Commit: "Add save and get tools".
+
+As built: `SqliteContextStore` is always registered (an empty-path store when the database folder cannot be created), and each tool awaits the faulted `StartupMigration.Completion` first, so that store is never used. Roots are passed as empty until a later task wires them.
 
 ---
 
