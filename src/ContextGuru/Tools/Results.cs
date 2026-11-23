@@ -36,6 +36,22 @@ public sealed record GetContextNotFound(
     [property: JsonPropertyName("searched_path")] string SearchedPath,
     [property: JsonPropertyName("project")] ProjectResult Project);
 
+public sealed record ListEntry(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("summary")] string Summary,
+    [property: JsonPropertyName("updated_at")] string UpdatedAt,
+    [property: JsonPropertyName("source_agent")] string? SourceAgent);
+
+public sealed record ListContextsResult(
+    [property: JsonPropertyName("project")] ProjectResult Project,
+    [property: JsonPropertyName("contexts")] IReadOnlyList<ListEntry> Contexts);
+
+public sealed record RemoveContextResult(
+    [property: JsonPropertyName("removed")] bool Removed,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("summary")] string? Summary,
+    [property: JsonPropertyName("project")] ProjectResult Project);
+
 /// <summary>Builds the one-text-block tool results. Errors are returned, not thrown, so the SDK keeps the exact text.</summary>
 public static class Results
 {

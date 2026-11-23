@@ -88,6 +88,21 @@ public sealed class ServerProcess : IAsyncDisposable
         return new ExitResult(_process.ExitCode, await stdout, await stderr);
     }
 
+    /// <summary>Waits for exit without reading the pipes, for a caller that drains them itself. On timeout the child is killed and the test fails.</summary>
+    public async Task WaitUntilExitedAsync(TimeSpan timeout)
+    {
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            await _process.WaitForExitAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            Kill();
+            throw Xunit.Sdk.FailException.ForFailure($"Process did not exit within {timeout}.");
+        }
+    }
+
     public void Kill() => _process.Kill(entireProcessTree: true);
 
     public async ValueTask DisposeAsync()
