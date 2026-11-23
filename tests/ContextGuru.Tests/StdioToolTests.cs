@@ -371,6 +371,10 @@ public sealed partial class StdioToolTests : IAsyncLifetime
         Assert.Equal("A name is required to remove a context.", Text(await Remove("  ")));
         Assert.Equal("A name is required to remove a context.", Text(await Remove("")));
         Assert.Equal("A name is required to remove a context.", Text(await Call("remove_context", new() { ["name"] = null, ["projectPath"] = _repo })));
+        // No name key at all: the tool must answer, not the SDK's generic rejection.
+        var missing = await Call("remove_context", new() { ["projectPath"] = _repo });
+        Assert.True(missing.IsError);
+        Assert.Equal("A name is required to remove a context.", Text(missing));
         Assert.Equal(1, Json(await List()).GetProperty("contexts").GetArrayLength());
     }
 
@@ -415,7 +419,8 @@ public sealed partial class StdioToolTests : IAsyncLifetime
         var tools = await _client!.ListToolsAsync(cancellationToken: Timeout());
         static string[] Required(McpClientTool t) =>
             t.JsonSchema.TryGetProperty("required", out var r) ? [.. r.EnumerateArray().Select(e => e.GetString()!)] : [];
-        Assert.Equal(["name"], Required(tools.Single(t => t.Name == "remove_context")));
+        // remove_context's name is optional in the schema so a missing name reaches the tool and gets the exact required-name message.
+        Assert.Empty(Required(tools.Single(t => t.Name == "remove_context")));
         Assert.Empty(Required(tools.Single(t => t.Name == "list_contexts")));
         Assert.Empty(Required(tools.Single(t => t.Name == "get_context")));
     }

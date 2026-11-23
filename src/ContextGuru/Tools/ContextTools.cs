@@ -126,13 +126,13 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
     [Description("Remove the saved handoff with the given name for the current project. Ask the user to confirm before calling this.")]
     public Task<CallToolResult> RemoveContext(
         McpServer server,
-        [Description("Exact name of the handoff to remove. Required.")] string name,
+        // Optional in the schema only, so a missing name reaches the tool and gets the exact required-name message.
+        [Description("Exact name of the handoff to remove. Required.")] string? name = null,
         [Description(ProjectPathHelp)] string? projectPath = null,
         CancellationToken ct = default) =>
         Guard(async () =>
         {
             List<string> problems = [];
-            // An explicit JSON null can still arrive in a non-nullable string: treat it as not given.
             var trimmed = (name ?? "").Trim();
             string? normalized = null;
             if (trimmed.Length == 0)
