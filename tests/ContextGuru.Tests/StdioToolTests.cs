@@ -4,8 +4,12 @@ using System.Text.RegularExpressions;
 using ContextGuru.Core.Storage;
 using ContextGuru.Tools;
 using Microsoft.Data.Sqlite;
+using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+
+// The SDK marks roots obsolete (spec 2026-07-28), but the design still uses them for Claude Code.
+#pragma warning disable MCP9005
 
 namespace ContextGuru.Tests;
 
@@ -64,18 +68,33 @@ public sealed partial class StdioToolTests : IAsyncLifetime
 
     static CancellationToken Timeout() => new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token;
 
-    async Task<CallToolResult> Call(string tool, Dictionary<string, object?> args, string? dbPath = null)
+    /// <summary>Starts the server once. The test owns the process, so it can kill it on timeout. Stderr is drained so a full pipe cannot block the server.</summary>
+    async Task Start(string? dbPath = null, string? workingFolder = null, McpClientOptions? options = null)
     {
         var ct = Timeout();
+        _server = ServerProcess.Start(dbPath ?? _db, workingFolder: workingFolder ?? _dir.Sub("work"));
+        _ = _server.StandardError.ReadToEndAsync();
+        var transport = new StreamClientTransport(_server.StandardInput.BaseStream, _server.StandardOutput.BaseStream);
+        _client = await McpClient.CreateAsync(transport, options, cancellationToken: ct);
+    }
+
+    /// <summary>A client that advertises roots and answers with the given folders.</summary>
+    static McpClientOptions WithRoots(params string[] folders) => new()
+    {
+        Capabilities = new ClientCapabilities { Roots = new RootsCapability() },
+        Handlers = new McpClientHandlers
+        {
+            RootsHandler = (_, _) => ValueTask.FromResult(new ListRootsResult { Roots = [.. folders.Select(f => new Root { Uri = new Uri(f).AbsoluteUri })] }),
+        },
+    };
+
+    async Task<CallToolResult> Call(string tool, Dictionary<string, object?> args, string? dbPath = null)
+    {
         if (_client is null)
         {
-            // The test owns the process, so it can kill it on timeout. Stderr is drained so a full pipe cannot block the server.
-            _server = ServerProcess.Start(dbPath ?? _db, workingFolder: _dir.Sub("work"));
-            _ = _server.StandardError.ReadToEndAsync();
-            var transport = new StreamClientTransport(_server.StandardInput.BaseStream, _server.StandardOutput.BaseStream);
-            _client = await McpClient.CreateAsync(transport, cancellationToken: ct);
+            await Start(dbPath);
         }
-        return await _client.CallToolAsync(tool, args, cancellationToken: ct);
+        return await _client!.CallToolAsync(tool, args, cancellationToken: Timeout());
     }
 
     static string Text(CallToolResult r) => Assert.IsType<TextContentBlock>(Assert.Single(r.Content)).Text;
@@ -91,6 +110,12 @@ public sealed partial class StdioToolTests : IAsyncLifetime
 
     Task<CallToolResult> Get(string? name = null) =>
         Call("get_context", new() { ["name"] = name, ["projectPath"] = _repo });
+
+    Task<CallToolResult> List() =>
+        Call("list_contexts", new() { ["projectPath"] = _repo });
+
+    Task<CallToolResult> Remove(string name) =>
+        Call("remove_context", new() { ["name"] = name, ["projectPath"] = _repo });
 
     [Fact]
     public async Task Save_NewContext_ReturnsWireShape()
@@ -296,6 +321,234 @@ public sealed partial class StdioToolTests : IAsyncLifetime
     {
         var j = Json(await Call("get_context", new() { ["name"] = "x" }));
         Assert.Equal("cwd", j.GetProperty("project").GetProperty("source").GetString());
+    }
+
+    [Fact]
+    public async Task List_EmptyProject_ReturnsEmptyArray_NotError()
+    {
+        var j = Json(await List());
+        Assert.Equal(0, j.GetProperty("contexts").GetArrayLength());
+        Assert.Equal(_repo, j.GetProperty("project").GetProperty("path").GetString());
+    }
+
+    [Fact]
+    public async Task List_ReturnsNewestFirst_MetadataOnly_NoBody()
+    {
+        Json(await Call("save_context", new() { ["summary"] = "old", ["body"] = Valid, ["name"] = "older", ["agent"] = "codex", ["projectPath"] = _repo }));
+        await Task.Delay(50);
+        Json(await Save("newer", summary: "new"));
+        var j = Json(await List());
+        var items = j.GetProperty("contexts").EnumerateArray().ToArray();
+        Assert.Equal(["newer", "older"], items.Select(i => i.GetProperty("name").GetString()!).ToArray());
+        Assert.Equal("new", items[0].GetProperty("summary").GetString());
+        Assert.Equal(JsonValueKind.Null, items[0].GetProperty("source_agent").ValueKind);
+        Assert.Equal("codex", items[1].GetProperty("source_agent").GetString());
+        Assert.Matches(Timestamp(), items[0].GetProperty("updated_at").GetString()!);
+        Assert.All(items, i => Assert.Equal(["name", "summary", "updated_at", "source_agent"], i.EnumerateObject().Select(p => p.Name).ToArray()));
+    }
+
+    [Fact]
+    public async Task Remove_Existing_ReturnsSummary_AndListShrinks()
+    {
+        Json(await Save("a", summary: "sa"));
+        Json(await Save("b", summary: "sb"));
+        Assert.Equal(2, Json(await List()).GetProperty("contexts").GetArrayLength());
+
+        var j = Json(await Remove("A"));
+        Assert.True(j.GetProperty("removed").GetBoolean());
+        Assert.Equal("a", j.GetProperty("name").GetString());
+        Assert.Equal("sa", j.GetProperty("summary").GetString());
+        Assert.Equal(_repo, j.GetProperty("project").GetProperty("path").GetString());
+
+        var names = Json(await List()).GetProperty("contexts").EnumerateArray().Select(i => i.GetProperty("name").GetString()!).ToArray();
+        Assert.Equal(["b"], names);
+    }
+
+    [Fact]
+    public async Task Remove_WithoutName_IsError()
+    {
+        Json(await Save("keep"));
+        Assert.Equal("A name is required to remove a context.", Text(await Remove("  ")));
+        Assert.Equal("A name is required to remove a context.", Text(await Remove("")));
+        Assert.Equal("A name is required to remove a context.", Text(await Call("remove_context", new() { ["name"] = null, ["projectPath"] = _repo })));
+        Assert.Equal(1, Json(await List()).GetProperty("contexts").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Remove_BadNameAndBadProjectPath_ReturnsBothLines()
+    {
+        var r = await Call("remove_context", new() { ["name"] = "Bad Name", ["projectPath"] = "rel/path" });
+        Assert.True(r.IsError);
+        var lines = Text(r).Split('\n');
+        Assert.Equal(2, lines.Length);
+        Assert.StartsWith("Name \"bad name\" is not valid.", lines[0]);
+        Assert.Equal("projectPath must be an absolute path to an existing folder.", lines[1]);
+    }
+
+    [Fact]
+    public async Task Remove_UnknownName_ReturnsRemovedFalse_SummaryNull()
+    {
+        Json(await Save("other"));
+        var j = Json(await Remove("nope"));
+        Assert.False(j.GetProperty("removed").GetBoolean());
+        Assert.Equal("nope", j.GetProperty("name").GetString());
+        Assert.Equal(JsonValueKind.Null, j.GetProperty("summary").ValueKind);
+        Assert.Equal(1, Json(await List()).GetProperty("contexts").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task ToolsList_MarksOnlyRemoveAsDestructive()
+    {
+        await List();
+        var tools = await _client!.ListToolsAsync(cancellationToken: Timeout());
+        Assert.Equal(["get_context", "list_contexts", "remove_context", "save_context"], tools.Select(t => t.Name).Order().ToArray());
+        foreach (var t in tools)
+        {
+            Assert.Equal(t.Name == "remove_context", t.ProtocolTool.Annotations?.DestructiveHint == true);
+        }
+    }
+
+    [Fact]
+    public async Task Tools_Schema_RemoveRequiresNameOnly_ListAndGetRequireNothing()
+    {
+        await List();
+        var tools = await _client!.ListToolsAsync(cancellationToken: Timeout());
+        static string[] Required(McpClientTool t) =>
+            t.JsonSchema.TryGetProperty("required", out var r) ? [.. r.EnumerateArray().Select(e => e.GetString()!)] : [];
+        Assert.Equal(["name"], Required(tools.Single(t => t.Name == "remove_context")));
+        Assert.Empty(Required(tools.Single(t => t.Name == "list_contexts")));
+        Assert.Empty(Required(tools.Single(t => t.Name == "get_context")));
+    }
+
+    [Fact]
+    public async Task Get_NoProjectPath_ClientRoots_UsesRootsSource()
+    {
+        await Start(options: WithRoots(_repo));
+        var j = Json(await Call("get_context", new() { ["name"] = "x" }));
+        var project = j.GetProperty("project");
+        Assert.Equal("roots", project.GetProperty("source").GetString());
+        Assert.Equal(_repo, project.GetProperty("path").GetString());
+    }
+
+    [Fact]
+    public async Task AllTools_NoProjectPath_ClientRoots_ShareTheRootsProject()
+    {
+        await Start(options: WithRoots(_repo));
+        var saved = Json(await Call("save_context", new() { ["summary"] = "s", ["body"] = Valid, ["name"] = "r" }));
+        Assert.Equal("roots", saved.GetProperty("project").GetProperty("source").GetString());
+        var list = Json(await Call("list_contexts", new()));
+        Assert.Equal("roots", list.GetProperty("project").GetProperty("source").GetString());
+        Assert.Equal(1, list.GetProperty("contexts").GetArrayLength());
+        var removed = Json(await Call("remove_context", new() { ["name"] = "r" }));
+        Assert.True(removed.GetProperty("removed").GetBoolean());
+        Assert.Equal("roots", removed.GetProperty("project").GetProperty("source").GetString());
+    }
+
+    [Fact]
+    public async Task Get_ProjectPathArgument_WinsOverClientRoots()
+    {
+        await Start(options: WithRoots(_dir.Sub("other")));
+        var j = Json(await Get("x"));
+        Assert.Equal("argument", j.GetProperty("project").GetProperty("source").GetString());
+    }
+
+    [Fact]
+    public async Task Get_RootsRequestFails_FallsBackToServerWorkingFolder()
+    {
+        var source = await RawGetWithRootsAsync(answer: id => $$$"""{"jsonrpc":"2.0","id":{{{id}}},"error":{"code":-32603,"message":"no roots"}}""");
+        Assert.Equal("cwd", source);
+    }
+
+    [Fact]
+    public async Task Get_RootsRequestNeverAnswered_TimesOutAndFallsBackToServerWorkingFolder()
+    {
+        var source = await RawGetWithRootsAsync(answer: null);
+        Assert.Equal("cwd", source);
+    }
+
+    /// <summary>
+    /// Speaks raw JSON-RPC on an older protocol version, because the SDK client resolves roots inside its own call and
+    /// cannot show a failed or silent client. Returns project.source from get_context without a projectPath.
+    /// </summary>
+    async Task<string?> RawGetWithRootsAsync(Func<string, string>? answer)
+    {
+        var limit = TimeSpan.FromSeconds(30);
+        _server = ServerProcess.Start(_db, workingFolder: _dir.Sub("work"));
+        _ = _server.StandardError.ReadToEndAsync();
+        async Task Send(string line)
+        {
+            await _server.StandardInput.WriteLineAsync(line);
+            await _server.StandardInput.FlushAsync();
+        }
+        async Task<JsonElement> Read() =>
+            JsonDocument.Parse(await _server.ReadLineAsync(limit) ?? throw new InvalidOperationException("Server closed stdout.")).RootElement;
+
+        await Send("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"roots":{}},"clientInfo":{"name":"raw","version":"1"}}}""");
+        var init = await Read();
+        Assert.Equal(1, init.GetProperty("id").GetInt32());
+        await Send("""{"jsonrpc":"2.0","method":"notifications/initialized"}""");
+        await Send("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_context","arguments":{"name":"x"}}}""");
+
+        var sawRootsRequest = false;
+        while (true)
+        {
+            var msg = await Read();
+            if (msg.TryGetProperty("method", out var method))
+            {
+                if (method.GetString() == "notifications/cancelled")
+                {
+                    // The server cancels the roots request when it gives up waiting.
+                    continue;
+                }
+                Assert.Equal("roots/list", method.GetString());
+                sawRootsRequest = true;
+                if (answer is not null)
+                {
+                    await Send(answer(msg.GetProperty("id").GetRawText()));
+                }
+                continue;
+            }
+            Assert.Equal(2, msg.GetProperty("id").GetInt32());
+            Assert.True(sawRootsRequest, "The server never asked for roots.");
+            var text = msg.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
+            return JsonDocument.Parse(text).RootElement.GetProperty("project").GetProperty("source").GetString();
+        }
+    }
+
+    [Fact]
+    public async Task Get_NoProjectPathNoRoots_UsesServerWorkingFolder()
+    {
+        var notARepo = _dir.Sub("not-a-repo");
+        await Start(workingFolder: notARepo);
+        var j = Json(await Call("get_context", new() { ["name"] = "x" }));
+        Assert.False(j.GetProperty("found").GetBoolean());
+        Assert.Equal("cwd", j.GetProperty("project").GetProperty("source").GetString());
+        Assert.Equal(notARepo, j.GetProperty("searched_path").GetString());
+    }
+
+    [Fact]
+    public async Task HandoffText_NeverAppearsInLogFiles()
+    {
+        const string marker = "ZQ-UNIQUE-MARKER-7f3a91";
+        const string summaryMarker = "ZQ-SUMMARY-MARKER-4c2e";
+        var body = Valid + marker + "\n";
+        Json(await Save("logtest", body: body, summary: summaryMarker));
+        Json(await Get("logtest"));
+        Json(await List());
+        Json(await Remove("logtest"));
+
+        await _client!.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        // The stream transport leaves stdin open. Closing it ends the server. The wait is bounded, then the process is killed.
+        _server!.StandardInput.Close();
+        await _server!.WaitUntilExitedAsync(TimeSpan.FromSeconds(15));
+
+        var logs = Directory.GetFiles(Path.Combine(_dir.Path, "logs"), "contextguru-*.log");
+        Assert.NotEmpty(logs);
+        var all = string.Concat(logs.Select(f => File.ReadAllText(f)));
+        // The log must exist and hold the save line, so the check below cannot pass on an empty file.
+        Assert.Contains("Saved context logtest", all);
+        Assert.DoesNotContain(marker, all);
+        Assert.DoesNotContain(summaryMarker, all);
     }
 
     [Fact]

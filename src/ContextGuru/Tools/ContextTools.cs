@@ -8,6 +8,9 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
+// The SDK marks roots obsolete (spec 2026-07-28), but the design still uses them for Claude Code.
+#pragma warning disable MCP9005
+
 namespace ContextGuru.Tools;
 
 [McpServerToolType]
@@ -18,6 +21,12 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
     // Logs the name and project only, never the handoff text.
     static readonly Action<ILogger, string, string, Exception?> Saved =
         LoggerMessage.Define<string, string>(LogLevel.Information, 0, "Saved context {Name} for project {Project}");
+
+    static readonly Action<ILogger, string, string, bool, Exception?> Removed =
+        LoggerMessage.Define<string, string, bool>(LogLevel.Information, 0, "Removed context {Name} for project {Project}: {Removed}");
+
+    // Long enough for a slow client, short enough that a silent one cannot hang a tool call.
+    static readonly TimeSpan RootsTimeout = TimeSpan.FromSeconds(5);
 
     const string ProjectPathHelp = "Absolute path of the project folder. Pass the current working folder.";
 
@@ -31,7 +40,7 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
         [Description("Optional name of the agent saving this, for example claude, codex or cursor.")] string? agent = null,
         [Description(ProjectPathHelp)] string? projectPath = null,
         CancellationToken ct = default) =>
-        Guard(() =>
+        Guard(async () =>
         {
             // An explicit JSON null can still arrive in a non-nullable string: report it as empty, not as a generic error.
             summary ??= "";
@@ -39,20 +48,20 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
             List<string> problems = [];
             var normalized = NormalizeOptionalName(name, problems);
             problems.AddRange(HandoffTemplate.Validate(summary, body).Select(e => e.Message));
-            var project = TryResolveProject(projectPath, problems);
+            var project = await ResolveProjectAsync(server, projectPath, problems, ct);
             if (project is null || problems.Count > 0)
             {
-                return Task.FromResult(Results.Error(string.Join('\n', problems)));
+                return Results.Error(string.Join('\n', problems));
             }
 
             var saved = store.Save(project, normalized, summary.Trim(), body, string.IsNullOrWhiteSpace(agent) ? null : agent.Trim());
             Saved(log, saved.Name, project.Name, null);
-            return Task.FromResult(Results.Ok(new SaveContextResult(
+            return Results.Ok(new SaveContextResult(
                 saved.Name,
                 saved.Overwritten,
                 saved.PreviousUpdatedAt is { } t ? Results.Timestamp(t) : null,
                 saved.PreviousSummary,
-                ProjectResult.From(project))));
+                ProjectResult.From(project)));
         }, ct);
 
     [McpServerTool(Name = "get_context", ReadOnly = true)]
@@ -62,26 +71,26 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
         [Description("Optional name. Defaults to the latest handoff.")] string? name = null,
         [Description(ProjectPathHelp)] string? projectPath = null,
         CancellationToken ct = default) =>
-        Guard(() =>
+        Guard(async () =>
         {
             List<string> problems = [];
             var normalized = NormalizeOptionalName(name, problems);
-            var project = TryResolveProject(projectPath, problems);
+            var project = await ResolveProjectAsync(server, projectPath, problems, ct);
             if (project is null || problems.Count > 0)
             {
-                return Task.FromResult(Results.Error(string.Join('\n', problems)));
+                return Results.Error(string.Join('\n', problems));
             }
 
             var record = normalized is null ? store.GetLatest(project) : store.Get(project, normalized);
             if (record is null)
             {
-                return Task.FromResult(Results.Ok(new GetContextNotFound(false, project.Path, ProjectResult.From(project))));
+                return Results.Ok(new GetContextNotFound(false, project.Path, ProjectResult.From(project)));
             }
 
             // A new random id per response, so saved text cannot contain the real marker.
             var id = Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
             var wrapped = $"<<<HANDOFF {id} BEGIN>>>\n{record.Body}\n<<<HANDOFF {id} END>>>";
-            return Task.FromResult(Results.Ok(new GetContextFound(
+            return Results.Ok(new GetContextFound(
                 true,
                 record.Name,
                 record.Summary,
@@ -89,21 +98,95 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
                 Results.Timestamp(record.UpdatedAt),
                 record.SourceAgent,
                 ProjectResult.From(project),
-                AgentInstructions)));
+                AgentInstructions));
         }, ct);
 
-    /// <summary>Returns null and adds the message when projectPath is bad, so it is reported with the other problems.</summary>
-    static ProjectInfo? TryResolveProject(string? projectPath, List<string> problems)
+    [McpServerTool(Name = "list_contexts", ReadOnly = true)]
+    [Description("List the saved handoffs for the current project, newest first. Returns name, summary, updated time and source agent, not the handoff text.")]
+    public Task<CallToolResult> ListContexts(
+        McpServer server,
+        [Description(ProjectPathHelp)] string? projectPath = null,
+        CancellationToken ct = default) =>
+        Guard(async () =>
+        {
+            List<string> problems = [];
+            var project = await ResolveProjectAsync(server, projectPath, problems, ct);
+            if (project is null)
+            {
+                return Results.Error(string.Join('\n', problems));
+            }
+
+            var items = store.List(project)
+                .Select(i => new ListEntry(i.Name, i.Summary, Results.Timestamp(i.UpdatedAt), i.SourceAgent))
+                .ToList();
+            return Results.Ok(new ListContextsResult(ProjectResult.From(project), items));
+        }, ct);
+
+    [McpServerTool(Name = "remove_context", Destructive = true)]
+    [Description("Remove the saved handoff with the given name for the current project. Ask the user to confirm before calling this.")]
+    public Task<CallToolResult> RemoveContext(
+        McpServer server,
+        [Description("Exact name of the handoff to remove. Required.")] string name,
+        [Description(ProjectPathHelp)] string? projectPath = null,
+        CancellationToken ct = default) =>
+        Guard(async () =>
+        {
+            List<string> problems = [];
+            // An explicit JSON null can still arrive in a non-nullable string: treat it as not given.
+            var trimmed = (name ?? "").Trim();
+            string? normalized = null;
+            if (trimmed.Length == 0)
+            {
+                problems.Add("A name is required to remove a context.");
+            }
+            else
+            {
+                normalized = NormalizeOptionalName(trimmed, problems);
+            }
+            var project = await ResolveProjectAsync(server, projectPath, problems, ct);
+            if (project is null || problems.Count > 0)
+            {
+                return Results.Error(string.Join('\n', problems));
+            }
+
+            var removed = store.Remove(project, normalized!);
+            Removed(log, normalized!, project.Name, removed is not null, null);
+            return Results.Ok(new RemoveContextResult(removed is not null, normalized!, removed?.Summary, ProjectResult.From(project)));
+        }, ct);
+
+    /// <summary>Resolves the project from projectPath, then client roots, then the working folder. Returns null and adds the message when projectPath is bad, so it is reported with the other problems.</summary>
+    static async Task<ProjectInfo?> ResolveProjectAsync(McpServer server, string? projectPath, List<string> problems, CancellationToken ct)
     {
         try
         {
-            // Roots are not used yet.
-            return ProjectResolver.Resolve(projectPath, [], Directory.GetCurrentDirectory());
+            // The argument wins, so the client is only asked when it is not given.
+            var roots = string.IsNullOrWhiteSpace(projectPath) ? await GetRootPathsAsync(server, ct) : [];
+            return ProjectResolver.Resolve(projectPath, roots, Directory.GetCurrentDirectory());
         }
         catch (InvalidProjectPathException e)
         {
             problems.Add(e.Message);
             return null;
+        }
+    }
+
+    /// <summary>Asks the client for its roots, only if it supports them. A failed, timed-out or unsupported request gives no roots. A cancelled call still cancels.</summary>
+    static async Task<IReadOnlyList<string>> GetRootPathsAsync(McpServer server, CancellationToken ct)
+    {
+        if (server.ClientCapabilities?.Roots is null)
+        {
+            return [];
+        }
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(RootsTimeout);
+        try
+        {
+            var result = await server.RequestRootsAsync(new ListRootsRequestParams(), timeout.Token);
+            return ProjectResolver.RootPathsFromUris(result.Roots.Select(r => r.Uri));
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            return [];
         }
     }
 
