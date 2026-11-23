@@ -54,6 +54,8 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
                 return Results.Error(string.Join('\n', problems));
             }
 
+            // The roots lookup can outlive a cancelled call, so check again before writing.
+            ct.ThrowIfCancellationRequested();
             var saved = store.Save(project, normalized, summary.Trim(), body, string.IsNullOrWhiteSpace(agent) ? null : agent.Trim());
             Saved(log, saved.Name, project.Name, null);
             return Results.Ok(new SaveContextResult(
@@ -149,6 +151,8 @@ public sealed class ContextTools(IContextStore store, StartupMigration migration
                 return Results.Error(string.Join('\n', problems));
             }
 
+            // The roots lookup can outlive a cancelled call, so check again before deleting.
+            ct.ThrowIfCancellationRequested();
             var removed = store.Remove(project, normalized!);
             Removed(log, normalized!, project.Name, removed is not null, null);
             return Results.Ok(new RemoveContextResult(removed is not null, normalized!, removed?.Summary, ProjectResult.From(project)));
