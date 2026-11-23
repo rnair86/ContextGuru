@@ -24,7 +24,7 @@ How to format replies. The reader works in a terminal and finds dense walls of t
 ## Overview
 ContextGuru is a local MCP server (C#, .NET 10, stdio) that stores short coding-agent handoffs in a shared SQLite file, so work saved in Claude Code, Codex or Cursor can be read back in any of them. Four tools (save, get, list, remove) are called by four commands: `/cg-save-context [name]`, `/cg-get-context [name]`, `/cg-list-contexts`, `/cg-remove-context {name}`. It ships as a `dotnet tool` built locally.
 
-Status: design approved, spike done, Tasks 0 to 3 done (skeleton, `HandoffTemplate`, `ProjectResolver`). The source of truth is `docs/designs/contextguru.md` (Status: Approved). Spike results are in `docs/spike.md`. The task list is `docs/superpowers/plans/2026-11-21-contextguru.md`, one GitHub issue per task. Next is Task 4, migrations and storage exceptions.
+Status: design approved, spike done, Tasks 0 to 6 done (skeleton, `HandoffTemplate`, `ProjectResolver`, migrations, SQLite store, stdio host with logging and startup migration). The source of truth is `docs/designs/contextguru.md` (Status: Approved). Spike results are in `docs/spike.md`. The task list is `docs/superpowers/plans/2026-11-21-contextguru.md`, one GitHub issue per task. Next is Task 7, the `save_context` and `get_context` tools.
 <!-- agents-md:end id=overview -->
 
 <!-- agents-md:begin id=commands -->
@@ -45,7 +45,7 @@ The spike confirmed the plain `dotnet test` forms above. `dotnet test --solution
 
 <!-- agents-md:begin id=testing -->
 ## Testing
-xUnit v2 (`xunit` 2.9.3) in `tests/ContextGuru.Tests`, 78 tests so far. `TempDir` gives each test a throwaway folder. xUnit v2 has no dynamic skip, so a test that cannot set up (for example no link can be made) must fail, not return. Planned: Core store tests use a temporary SQLite file, and stdio tests start the built tool and drive it with an MCP client. All tests run on Windows. Linux and macOS are not tested in v1. Build, tests and format check must pass before a change is done. Warnings are errors.
+xUnit v2 (`xunit` 2.9.3) in `tests/ContextGuru.Tests`, 116 tests so far. `TempDir` gives each test a throwaway folder. xUnit v2 has no dynamic skip, so a test that cannot set up (for example no link can be made) must fail, not return. Store tests use a temporary SQLite file and a settable `FixedTimeProvider`. Host tests (`ServerHostTests`) start the built tool through `ServerProcess` and talk raw JSON-RPC over stdio, with timeouts on every wait. Planned: tool tests drive the server with an MCP client. All tests run on Windows. Linux and macOS are not tested in v1. Build, tests and format check must pass before a change is done. Warnings are errors.
 <!-- agents-md:end id=testing -->
 
 <!-- agents-md:begin id=structure -->
@@ -61,14 +61,13 @@ Current layout:
 
 Code layout. Built so far:
 
-- `src/ContextGuru.Core`: class library, no MCP references. Has `Models/` (records), `Template/HandoffTemplate.cs` and `Projects/ProjectResolver.cs`
-- `src/ContextGuru`: console app, still only `Program.cs`
-- `tests/ContextGuru.Tests`: xUnit tests plus the `TempDir` helper
+- `src/ContextGuru.Core`: class library, no MCP references. Has `Models/` (records), `Template/HandoffTemplate.cs`, `Projects/ProjectResolver.cs`, and `Storage/` (`Migrations`, `IContextStore`, `SqliteContextStore`, storage exceptions)
+- `src/ContextGuru`: console app. `Program.cs` (routing, logging, MCP stdio host) and `StartupMigration.cs`
+- `tests/ContextGuru.Tests`: xUnit tests plus the `TempDir`, `FixedTimeProvider` and `ServerProcess` helpers
 
 Planned (from the design):
 
-- In Core: `IContextStore`, the SQLite store, migrations
-- In `src/ContextGuru`: MCP host, four tools, doctor, installer, command file templates, packaged as a `dotnet tool`
+- In `src/ContextGuru`: the four tools, doctor, installer, command file templates, packaged as a `dotnet tool`
 - `local/`: `build.ps1` and `install.ps1`
 - `spike/`: git-ignored scratch folder (the Task 0 spike code is already deleted)
 <!-- agents-md:end id=structure -->
@@ -109,6 +108,13 @@ Learned while building Tasks 2 and 3:
 - Edit C# with the editor tool, not a script. Python heredocs and shell quoting mangle backslash escapes such as `\n` inside string literals.
 - A test that must exercise a link can use a junction on Windows (`mklink /J`), which needs no privilege. Check such a test by disabling the feature and confirming the test fails.
 
+Learned while building Tasks 4 to 6:
+
+- Connections use `Pooling=False`, `Default Timeout=5` and `busy_timeout=5000`. A busy read cannot be provoked with a plain write lock in WAL. The store test uses a second connection in EXCLUSIVE locking mode.
+- The host is built without default configuration sources, so project `appsettings.json` and logging environment variables cannot change it or make the SDK log request payloads. Serilog has no file size cap.
+- A failed or newer-schema migration does not stop the server. It is logged and `StartupMigration.Completion` is faulted, so tools must await `Completion` and report the fault. If the database folder cannot be created, the store is not registered, so tools must handle that too.
+- A mutation check needs a test that really can fail. The `contexts_latest` index already orders ties by id, so the tie-break test drops the index first.
+
 Carried over from the design:
 
 - WAL needs a local disk. Network or synced folders can corrupt the database.
@@ -133,6 +139,7 @@ The most important section. Keep it current.
 
 ## Notes
 <!-- Human-owned. Anything you write here is never touched by re-runs of agents-md. -->
+## Working Instructions
 - Work on 1 issue at a time
 - Use the Github tools to read the Issue that are created in Github in Todo status  not from the spec/plan document 
 - When starting work on an issue move its status in github from `Todo` to `In Progress`
