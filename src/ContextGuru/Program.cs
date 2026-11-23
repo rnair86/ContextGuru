@@ -8,7 +8,7 @@ using Serilog;
 
 if (args is ["--doctor"])
 {
-    var doctorDbPath = SqliteContextStore.GetDatabasePath(Environment.GetEnvironmentVariable("CONTEXTGURU_DB"));
+    var doctorDbPath = Path.GetFullPath(SqliteContextStore.GetDatabasePath(Environment.GetEnvironmentVariable("CONTEXTGURU_DB")));
     return Doctor.Run(doctorDbPath, Directory.GetCurrentDirectory(), Console.Out);
 }
 

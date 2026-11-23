@@ -245,7 +245,7 @@ The server logs through `Microsoft.Extensions.Logging` at Information level, and
 *   The project comes from the current folder, so the source is always `cwd`.
 *   `.git` found means the folder walk found a `.git` entry. It does not look for the git program.
 *   The write test opens the database, takes the write lock with `BEGIN IMMEDIATE` and rolls back, so nothing is written.
-*   It never migrates and never throws on a newer schema. It only reads `user_version` and prints it, with "newer than this tool" if it is higher.
+*   It never migrates and never throws on a newer schema. It only reads `user_version` and prints it, with "newer than this tool" if it is higher, which counts as a failed check (exit code 1).
 *   If the database file does not exist yet, it prints "not created yet (created on first save)" for the schema version and "skipped" for the write test.
 *   The exit code is 0 when every check passes and 1 when any check fails. It does not start the MCP host.
 

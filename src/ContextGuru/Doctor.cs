@@ -38,23 +38,19 @@ public static class Doctor
 
     static string VersionLine()
     {
-        var info = typeof(Doctor).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-        string version;
-        if (!string.IsNullOrWhiteSpace(info))
-        {
-            var plus = info.IndexOf('+', StringComparison.Ordinal);
-            version = plus >= 0 ? info[..plus] : info;
-        }
-        else
-        {
-            version = typeof(Doctor).Assembly.GetName().Version?.ToString() ?? "0.0.0";
-        }
-
+        var info = typeof(Doctor).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion;
+        var plus = info.IndexOf('+', StringComparison.Ordinal);
+        var version = plus >= 0 ? info[..plus] : info;
         return $"version: {version}";
     }
 
     static (string Line, bool Ok) CheckSchemaVersion(string dbPath)
     {
+        if (Directory.Exists(dbPath))
+        {
+            return ("schema version: failed (database path is a directory)", false);
+        }
+
         if (!File.Exists(dbPath))
         {
             return ("schema version: not created yet (created on first save)", true);
@@ -62,14 +58,14 @@ public static class Doctor
 
         try
         {
-            using var c = Migrations.Open(dbPath);
+            using var c = Migrations.Open(dbPath, SqliteOpenMode.ReadWrite);
             var version = Migrations.ReadUserVersion(c);
             var formatted = version.ToString(CultureInfo.InvariantCulture);
             return version > Migrations.Latest
                 ? ($"schema version: {formatted} (newer than this tool)", false)
                 : ($"schema version: {formatted}", true);
         }
-        catch (SqliteException ex)
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
         {
             return ($"schema version: failed ({ex.Message})", false);
         }
@@ -84,6 +80,11 @@ public static class Doctor
 
     static (string Line, bool Ok) CheckWriteLock(string dbPath)
     {
+        if (Directory.Exists(dbPath))
+        {
+            return ("write test: failed (database path is a directory)", false);
+        }
+
         if (!File.Exists(dbPath))
         {
             return ("write test: skipped", true);
@@ -91,14 +92,15 @@ public static class Doctor
 
         try
         {
-            using var c = Migrations.Open(dbPath);
+            using var c = Migrations.Open(dbPath, SqliteOpenMode.ReadWrite);
+            // Microsoft.Data.Sqlite issues BEGIN IMMEDIATE for BeginTransaction().
             using var tx = c.BeginTransaction();
             tx.Rollback();
             return ("write test: ok", true);
         }
-        catch (SqliteException)
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
         {
-            return ("write test: failed", false);
+            return ($"write test: failed ({ex.Message})", false);
         }
     }
 }
