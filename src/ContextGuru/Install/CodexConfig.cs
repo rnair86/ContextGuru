@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace ContextGuru.Install;
@@ -38,10 +40,18 @@ sealed class CodexConfig(string codexPath, string home)
         {
             return false;
         }
-        var transport = JsonNode.Parse(stdout)?["transport"];
-        return (string?)transport?["type"] == "stdio"
-            && (string?)transport["command"] == ServerName
-            && transport["args"] is null or JsonArray { Count: 0 };
+        try
+        {
+            var transport = JsonNode.Parse(stdout)?["transport"];
+            return (string?)transport?["type"] == "stdio"
+                && (string?)transport["command"] == ServerName
+                && transport["args"] is null or JsonArray { Count: 0 };
+        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException)
+        {
+            // Not JSON, or JSON of another shape than codex documents.
+            throw new InstallerException("Could not read the output of `codex mcp get`.");
+        }
     }
 
     public void Add() => RunChecked("mcp", "add", ServerName, "--", ServerName);
@@ -53,7 +63,8 @@ sealed class CodexConfig(string codexPath, string home)
         var (code, _, stderr) = Run(args);
         if (code != 0)
         {
-            throw new InstallerException(stderr.Trim());
+            // codex normally explains itself on stderr. Without it, name the call and the exit code.
+            throw new InstallerException(stderr.Trim() is { Length: > 0 } message ? message : $"codex {args[0]} {args[1]} failed with exit code {code}.");
         }
     }
 
@@ -75,11 +86,22 @@ sealed class CodexConfig(string codexPath, string home)
         }
         info.Environment["CODEX_HOME"] = home;
 
-        using var process = Process.Start(info)!;
-        process.StandardInput.Close();
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        process.WaitForExit();
-        return (process.ExitCode, stdout.Result, stderr.Result);
+        Process process;
+        try
+        {
+            process = Process.Start(info)!;
+        }
+        catch (Win32Exception e)
+        {
+            throw new InstallerException($"Could not start {codexPath}: {e.Message}");
+        }
+        using (process)
+        {
+            process.StandardInput.Close();
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            process.WaitForExit();
+            return (process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
+        }
     }
 }

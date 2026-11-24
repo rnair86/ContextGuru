@@ -93,14 +93,15 @@ Packages `Serilog.Sinks.File` 7.0.0, `Serilog.Extensions.Hosting` 11.0.0, `Micro
 
 ## 6. Codex MCP config
 
-- Needs TOML: YES. The Codex MCP config is `~/.codex/config.toml` with `[mcp_servers.<name>]` tables (an existing `[mcp_servers.github]` entry confirms the shape). A TOML package is not required: `codex mcp add <name> -- <command> <args>` exists to write the entry, and a section can also be appended as text. Not run against the real config in this spike, so the exact `codex mcp add` output is unverified.
+- Needs TOML: YES. The Codex MCP config is `~/.codex/config.toml` with `[mcp_servers.<name>]` tables (an existing `[mcp_servers.github]` entry confirms the shape). A TOML package is not required: `codex mcp add <name> -- <command> <args>` exists to write the entry, and a section can also be appended as text.
 - Decision for Task 13: do not add a TOML package. The installer runs `codex mcp add contextguru -- contextguru` and `codex mcp remove contextguru`, with `CODEX_HOME` always set to the folder of the target config (a temp folder in tests, never the real one).
 - Observed with Codex CLI 0.171.0 and a temp `CODEX_HOME`:
   - `codex mcp get contextguru --json` exits 0 with JSON (`transport.type`, `command`, `args`) when registered and 1 when missing. It can print a WARNING on stderr for a home under the temp folder, so parse stdout only.
-  - `add` writes `[mcp_servers.contextguru]` with `command = "contextguru"` and no args key. A second add gives the same bytes. It drops extra keys (approval mode, timeout, env) of an existing entry, rewrites CRLF to LF, and drops a comment inside an existing `[mcp_servers.*]` table. Top-level comments and other tables stay, and the new table is placed before later non-mcp tables.
+  - `add` writes `[mcp_servers.contextguru]` with `command = "contextguru"` and no args key. A second add gives the same bytes.
+  - When `add` or `remove` changes the file it rewrites it. Every `[mcp_servers.*]` table is re-serialized, so: comments inside or directly above those tables are lost; keys this Codex version does not know are lost, also in other servers' tables; an empty `args = []` is dropped; an integer such as `startup_timeout_sec = 30` becomes `30.0`; the extra keys (approval mode, timeout, env) of an existing contextguru entry are dropped; tables can be reordered (the new table lands before later non-mcp tables); CRLF becomes LF. Top-level comments, other tables and their comments stay. The author accepted this and the `.bak` keeps the original.
   - Broken TOML or a wrong value type: `add` and `remove` exit 1 with the reason on stderr and the file is unchanged. `remove` of a missing entry exits 0 and leaves the file unchanged.
-  - `CODEX_HOME` must exist or codex exits 1. Rewriting the config drops a custom Windows ACL. Accepted.
-- Install skips `add` when the entry is already a stdio server running `contextguru` with no args, so extra keys stay. The config is backed up before `add` or `remove`, and the backup is removed again when codex left the bytes unchanged.
+  - `CODEX_HOME` must exist or codex exits 1. Rewriting the config drops a custom Windows ACL (accepted). A read-only config makes `add` fail with "Access is denied" and the file is unchanged.
+- Install skips `add` when the entry is already a stdio server running `contextguru` with no args, so the config is then not rewritten and its extra keys stay. The config is backed up before `add` or `remove`, and the backup is removed again when the config equals it afterwards (a no-op or a failed run).
 
 ## 7. Package versions to pin
 

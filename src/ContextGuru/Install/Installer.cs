@@ -165,11 +165,10 @@ public sealed class Installer(string baseFolder)
     CodexConfig NewCodexConfig(AgentTarget target) =>
         new(CodexConfig.Find(CodexSearchPath ?? Environment.GetEnvironmentVariable("PATH")), Path.GetDirectoryName(target.ConfigPath)!);
 
-    // Codex rewrites the config itself. Take a backup first and drop it if the bytes are the same afterwards (a no-op or a failed run).
+    // Codex rewrites the config itself. Take a backup first and drop it if the config equals it afterwards (a no-op or a failed run).
     static void RunWithBackup(string configPath, Action run)
     {
-        var before = ReadBytes(configPath);
-        var backup = before is null ? null : FreeBackupName(configPath);
+        var backup = Path.Exists(configPath) ? FreeBackupName(configPath) : null;
         if (backup is not null)
         {
             File.Copy(configPath, backup);
@@ -180,8 +179,10 @@ public sealed class Installer(string baseFolder)
         }
         finally
         {
-            if (backup is not null && ReadBytes(configPath) is { } after && after.AsSpan().SequenceEqual(before))
+            if (backup is not null && ReadBytes(configPath) is { } after && after.AsSpan().SequenceEqual(File.ReadAllBytes(backup)))
             {
+                // File.Copy keeps a read-only attribute, which would make the delete fail.
+                File.SetAttributes(backup, FileAttributes.Normal);
                 File.Delete(backup);
             }
         }
