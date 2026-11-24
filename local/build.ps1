@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
 # Run from the repo root so global.json applies, and leave the caller's folder as it was.
-Push-Location (Split-Path $PSScriptRoot)
+Push-Location -LiteralPath (Split-Path -LiteralPath $PSScriptRoot)
 try {
     dotnet restore ContextGuru.slnx
     dotnet build ContextGuru.slnx -c Release
