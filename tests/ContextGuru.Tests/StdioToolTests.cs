@@ -644,4 +644,70 @@ public sealed partial class StdioToolTests : IAsyncLifetime
         Assert.True(again.IsError);
         Assert.Equal(Text(r), Text(again));
     }
+
+    [Fact]
+    public async Task TwoProcesses_Write25EachToSameDatabase_AllRowsExist_NoBusyErrors()
+    {
+        var (a, b) = await ServerSession.StartPairAsync(_db, _dir.Sub("work-a"), _dir.Sub("work-b"));
+        await using var _a = a;
+        await using var _b = b;
+
+        async Task<CallToolResult[]> WriteBatch(McpClient client, string prefix)
+        {
+            var results = new CallToolResult[25];
+            for (var i = 0; i < 25; i++)
+            {
+                results[i] = await client.CallToolAsync(
+                    "save_context",
+                    new Dictionary<string, object?>
+                    {
+                        ["summary"] = $"summary-{prefix}-{i}",
+                        ["body"] = Valid,
+                        ["name"] = $"{prefix}-{i}",
+                        ["projectPath"] = _repo,
+                    },
+                    cancellationToken: Timeout());
+            }
+            return results;
+        }
+
+        var batches = await Task.WhenAll(WriteBatch(a.Client, "a"), WriteBatch(b.Client, "b"));
+        Assert.All(batches[0].Concat(batches[1]), r =>
+        {
+            Assert.False(r.IsError == true, Text(r));
+            Assert.NotEqual("Database busy, retry.", Text(r));
+        });
+
+        var list = Json(await a.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: Timeout()));
+        var actualNames = list.GetProperty("contexts").EnumerateArray().Select(e => e.GetProperty("name").GetString()!).Order().ToArray();
+        var expectedNames = Enumerable.Range(0, 25).SelectMany(i => new[] { $"a-{i}", $"b-{i}" }).Order().ToArray();
+        Assert.Equal(50, actualNames.Length);
+        Assert.Equal(expectedNames, actualNames);
+    }
+
+    [Fact]
+    public async Task TwoProcessesStartedTogether_OnNewDatabase_BothSucceed_UserVersionLatest()
+    {
+        var freshDb = Path.Combine(_dir.Path, "fresh.db");
+        Assert.False(File.Exists(freshDb));
+
+        var (a, b) = await ServerSession.StartPairAsync(freshDb, _dir.Sub("work-a"), _dir.Sub("work-b"));
+        await using var _a = a;
+        await using var _b = b;
+
+        var results = await Task.WhenAll(
+            a.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: Timeout()).AsTask(),
+            b.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: Timeout()).AsTask());
+
+        Assert.All(results, r =>
+        {
+            Assert.False(r.IsError == true, Text(r));
+            Assert.Equal(0, Json(r).GetProperty("contexts").GetArrayLength());
+        });
+
+        using var c = Migrations.Open(freshDb);
+        Assert.Equal(Migrations.Latest, Migrations.ReadUserVersion(c));
+        using var wal = new SqliteCommand("PRAGMA journal_mode", c);
+        Assert.Equal("wal", (string)wal.ExecuteScalar()!, StringComparer.OrdinalIgnoreCase);
+    }
 }

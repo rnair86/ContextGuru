@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
 
 namespace ContextGuru.Tests;
 
@@ -113,5 +114,92 @@ public sealed class ServerProcess : IAsyncDisposable
             await _process.WaitForExitAsync();
         }
         _process.Dispose();
+    }
+}
+
+/// <summary>An MCP client paired with its server process, draining stderr and killing the process tree on dispose or timeout.</summary>
+public sealed class ServerSession : IAsyncDisposable
+{
+    readonly ServerProcess _server;
+
+    ServerSession(ServerProcess server, McpClient client)
+    {
+        _server = server;
+        Client = client;
+    }
+
+    public McpClient Client { get; }
+
+    /// <summary>Starts two server processes back-to-back against the same database, then connects both MCP clients in parallel.</summary>
+    public static async Task<(ServerSession First, ServerSession Second)> StartPairAsync(
+        string dbPath,
+        string? workingFolderA = null,
+        string? workingFolderB = null,
+        TimeSpan? timeout = null)
+    {
+        var serverA = ServerProcess.Start(dbPath, workingFolder: workingFolderA);
+        ServerProcess serverB;
+        try
+        {
+            serverB = ServerProcess.Start(dbPath, workingFolder: workingFolderB);
+        }
+        catch
+        {
+            await serverA.DisposeAsync();
+            throw;
+        }
+
+        var tA = ConnectAsync(serverA, timeout);
+        var tB = ConnectAsync(serverB, timeout);
+        try
+        {
+            var sessions = await Task.WhenAll(tA, tB);
+            return (sessions[0], sessions[1]);
+        }
+        catch
+        {
+            if (tA.IsCompletedSuccessfully)
+            {
+                await tA.Result.DisposeAsync();
+            }
+            if (tB.IsCompletedSuccessfully)
+            {
+                await tB.Result.DisposeAsync();
+            }
+            throw;
+        }
+    }
+
+    static async Task<ServerSession> ConnectAsync(ServerProcess server, TimeSpan? timeout)
+    {
+        _ = server.StandardError.ReadToEndAsync();
+        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(30));
+        try
+        {
+            var transport = new StreamClientTransport(server.StandardInput.BaseStream, server.StandardOutput.BaseStream);
+            var client = await McpClient.CreateAsync(transport, cancellationToken: cts.Token);
+            return new ServerSession(server, client);
+        }
+        catch
+        {
+            await server.DisposeAsync();
+            throw;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await Client.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch (TimeoutException)
+        {
+            // Falls through: the process is killed below.
+        }
+        finally
+        {
+            await _server.DisposeAsync();
+        }
     }
 }
