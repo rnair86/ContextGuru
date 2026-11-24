@@ -1,5 +1,6 @@
 using ContextGuru;
 using ContextGuru.Core.Storage;
+using ContextGuru.Install;
 using ContextGuru.Tools;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -12,10 +13,14 @@ if (args is ["--doctor"])
     return Doctor.Run(doctorDbPath, Directory.GetCurrentDirectory(), Console.Out);
 }
 
+if (args is ["install" or "uninstall", ..])
+{
+    return Installer.Run(args, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), Console.Out, Console.Error);
+}
+
 if (args.Length > 0)
 {
-    // install and uninstall are added in Task 12.
-    Console.Error.WriteLine("Usage: contextguru [--doctor]");
+    Console.Error.WriteLine("Usage: contextguru [--doctor | install|uninstall --agent claude|codex|cursor]");
     return 2;
 }
 
