@@ -33,6 +33,14 @@ Notes that change later tasks:
 
 Decision per failing agent: no agent failed the main check, so none is dropped. Codex and Cursor lack roots, so they rely on the `projectPath` argument and the working-folder fallback.
 
+### Tool address probes (2026-11-23)
+
+These Windows CLI probes used disposable project paths and empty databases. They left real agent configuration untouched.
+
+- Claude Code emitted a `tool_use` named `mcp__contextguru__list_contexts` and returned `contexts: []`.
+- Codex reported structured call fields `server: contextguru` and `tool: list_contexts`, and returned `contexts: []`. These fields identify the call in the CLI event. Separately, upstream Codex uses the raw tool name and server namespace for model-facing registration. The command instructs Codex to call `list_contexts` on the `contextguru` MCP server. [Upstream Codex MCP tool registration](https://github.com/openai/codex/blob/main/codex-rs/codex-mcp/src/rmcp_client.rs)
+- Cursor's first native MCP event showed `args.name: contextguru-list_contexts`, `providerIdentifier: contextguru`, and `toolName: list_contexts`. Headless permission blocked that attempt. With `Mcp(contextguru:list_contexts)` allowed in the disposable project, Cursor invoked `contextguru-list_contexts` with `projectPath` and returned `contexts: []` with `isError: false`.
+
 ## 2. ModelContextProtocol
 
 Evidence from `spike/McpSpike` (a server and a client in one project, driven over a real stdio process).

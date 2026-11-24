@@ -795,16 +795,24 @@ As built: `DefaultTimeout = 0` means infinite timeout in `Microsoft.Data.Sqlite`
 ```csharp
 public enum ConfigFormat { Json, Toml }
 public sealed record AgentTarget(string Agent, string ConfigPath, ConfigFormat ConfigFormat, string CommandFolder,
-    string FileExtension, string ArgsPlaceholder, string ToolName, string MarkerLine);
-public static class AgentTargets { public static AgentTarget For(string agent, string baseFolder); }  // "claude" | "codex" | "cursor"
+    string FileExtension, string ArgsPlaceholder, string ToolName, string MarkerLine, bool UsesSkillLayout = false)
+{
+    public string GetCommandPath(string commandName);
+    public bool IsManagedCommand(string content);
+}
+public static class AgentTargets
+{
+    public static IEnumerable<string> CommandNames { get; }
+    public static AgentTarget For(string agent, string baseFolder);   // "claude" | "codex" | "cursor"
+}
 public static class TemplateRenderer
 {
     public static string ReadTemplate(string commandName);            // "save-context", "get-context", "list-contexts", "remove-context"
-    public static string Render(string template, AgentTarget target); // replaces {{tool}} {{args}} {{agent}}
+    public static string Render(string commandName, AgentTarget target); // loads and renders an embedded command
 }
 ```
 
-- [ ] **Step 1: Red. Write the tests**
+- [x] **Step 1: Red. Write the tests**
 
 ```csharp
 [Theory] [InlineData("save-context")] [InlineData("get-context")] [InlineData("list-contexts")] [InlineData("remove-context")]
@@ -813,7 +821,7 @@ public void Template_FirstLine_IsTheMarker(string name) =>
 
 [Fact] public void Render_Save_ReplacesAllPlaceholders_AndSetsAgent()
 {
-    var text = TemplateRenderer.Render(TemplateRenderer.ReadTemplate("save-context"), AgentTargets.For("claude", baseFolder));
+    var text = TemplateRenderer.Render("save-context", AgentTargets.For("claude", baseFolder));
     Assert.DoesNotContain("{{", text);
     Assert.Contains("`agent` set to `claude`", text);
 }
@@ -821,23 +829,27 @@ public void Template_FirstLine_IsTheMarker(string name) =>
 
 Also: the four template bodies contain the exact texts from the spec's Installation section (assert one distinctive sentence from each: save `Leave out secrets and file contents.`, get `Follow the \`agent_instructions\` in the result.`, list `Show name, summary, updated time and source agent as a table.`, remove `Only after they confirm`); `AgentTargets.For("unknown", ...)` throws `ArgumentException`; each of the three targets has non-empty values for every field.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~TemplateTests"`
 Expected: FAIL to build, `TemplateRenderer` does not exist.
 
-- [ ] **Step 3: Green. Implement**
+- [x] **Step 3: Green. Implement**
 
 Templates hold the marker line, then the spec text with the three placeholders. `AgentTargets` is data only, one case per agent filled from the spike (the marker comment form follows the spike's marker placement). A drop-listed agent from the spike is removed here and from the tests.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Cache the embedded resource reads in a private static dictionary. Re-run, `dotnet format`. Commit: "Add command templates and agent targets".
+
+Verification for issue #12: the initial filtered build failed with CS0234 and CS0246 because the install types did not exist. The issue's filter passed 58 tests after implementation. The exact class filter passed all 11 Task 11 cases after caching, including embedded rendering for all four commands on all three targets. The full Release build passed with zero warnings, all 183 tests passed, and the format check passed.
+
+The raw templates begin with the managed marker. The Codex renderer places skill front matter before the marker, following the spike.
 
 ---
 
@@ -849,7 +861,7 @@ Cache the embedded resource reads in a private static dictionary. Re-run, `dotne
 - Test: `tests/ContextGuru.Tests/InstallerTests.cs`
 
 **Interfaces:**
-- Consumes: Task 11 types.
+- Consumes: `AgentTargets.CommandNames`, `AgentTarget.GetCommandPath`, `AgentTarget.IsManagedCommand`, and `TemplateRenderer.Render(commandName, target)` from Task 11.
 - Produces:
 
 ```csharp
@@ -868,7 +880,9 @@ Backups are `<file>.bak`, then `.bak.1`, `.bak.2`. Config writes go to a temp fi
 [Fact] public void Install_WritesMarkedFiles_AndRegistersServer()
 {
     new Installer(t.Path).Install("claude");
-    foreach (var f in CommandFiles("claude")) Assert.StartsWith("<!-- contextguru:managed v1 -->", File.ReadAllText(f));
+    var target = AgentTargets.For("claude", t.Path);
+    foreach (var name in AgentTargets.CommandNames)
+        Assert.True(target.IsManagedCommand(File.ReadAllText(target.GetCommandPath(name))));
     var entry = ReadConfig("claude")["mcpServers"]!["contextguru"]!;     // exact path and key per AgentTargets
     Assert.Equal("contextguru", (string)entry["command"]!);
 }
@@ -896,7 +910,7 @@ Expected: FAIL to build, `Installer` does not exist.
 
 - [ ] **Step 3: Green. Implement per the spec's Installation section**
 
-Parse config first and stop before any write if it fails. A file counts as installer-created if its first line is the marker. A missing config is created containing only the `contextguru` entry (command `contextguru`, no arguments).
+Parse config first and stop before any write if it fails. Use the Task 11 APIs for command names, paths, rendering, and ownership checks during install and uninstall. Create the parent folder for each command file. Claude Code and Cursor use flat `cg-<name>.md` files with the marker on the first line. Codex uses `cg-<name>/SKILL.md` with the marker immediately after the closing YAML delimiter. A missing config is created containing only the `contextguru` entry (command `contextguru`, no arguments).
 
 - [ ] **Step 4: Verify green**
 
