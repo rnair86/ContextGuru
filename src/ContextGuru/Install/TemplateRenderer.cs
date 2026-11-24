@@ -17,24 +17,32 @@ public static class TemplateRenderer
         using var stream = typeof(TemplateRenderer).Assembly.GetManifestResourceStream(resourceName)
             ?? throw new ArgumentException("Unknown command.", nameof(commandName));
         using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        var template = reader.ReadToEnd();
+        var lineEnd = template.IndexOf('\n');
+        if (lineEnd < 0 || !template.AsSpan(0, lineEnd).TrimEnd('\r').SequenceEqual(AgentTargets.ManagedMarker))
+        {
+            throw new InvalidOperationException($"Embedded template '{commandName}' is missing the managed marker.");
+        }
+
+        return template;
     }
 
-    public static string Render(string template, AgentTarget target)
+    public static string Render(string commandName, AgentTarget target)
     {
-        var toolStart = template.IndexOf(ToolPlaceholder, StringComparison.Ordinal) + ToolPlaceholder.Length;
-        var toolEnd = template.IndexOf('`', toolStart);
-        var tool = template[toolStart..toolEnd];
-        var address = string.Format(CultureInfo.InvariantCulture, target.ToolName, tool);
+        var command = CommandDefinition.For(commandName);
+        var template = ReadTemplate(command.Name);
+        var address = string.Format(CultureInfo.InvariantCulture, target.ToolName, command.ToolName);
+        var tool = target.Agent == "codex" ? $"`{address}` on the `contextguru` MCP server" : $"`{address}`";
         var args = target.Agent == "claude" ? $"`{target.ArgsPlaceholder}`" : target.ArgsPlaceholder;
-        var rendered = template.Replace(ToolPlaceholder + tool, address, StringComparison.Ordinal)
+        var body = template[AgentTargets.ManagedMarker.Length..]
+            .Replace(ToolPlaceholder, tool, StringComparison.Ordinal)
             .Replace("{{args}}", args, StringComparison.Ordinal)
             .Replace("{{agent}}", target.Agent, StringComparison.Ordinal);
+        var rendered = target.MarkerLine + body;
 
-        if (target.Agent == "codex")
+        if (target.UsesSkillLayout)
         {
-            var commandName = tool.Replace('_', '-');
-            return $"---\nname: cg-{commandName}\ndescription: Run ContextGuru {commandName}.\n---\n" + rendered.ReplaceLineEndings("\n");
+            return $"---\nname: {command.InstalledName}\ndescription: Run ContextGuru {command.Name}.\n---\n" + rendered.ReplaceLineEndings("\n");
         }
 
         return rendered;

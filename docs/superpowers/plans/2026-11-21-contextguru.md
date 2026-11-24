@@ -795,12 +795,20 @@ As built: `DefaultTimeout = 0` means infinite timeout in `Microsoft.Data.Sqlite`
 ```csharp
 public enum ConfigFormat { Json, Toml }
 public sealed record AgentTarget(string Agent, string ConfigPath, ConfigFormat ConfigFormat, string CommandFolder,
-    string FileExtension, string ArgsPlaceholder, string ToolName, string MarkerLine);
-public static class AgentTargets { public static AgentTarget For(string agent, string baseFolder); }  // "claude" | "codex" | "cursor"
+    string FileExtension, string ArgsPlaceholder, string ToolName, string MarkerLine, bool UsesSkillLayout = false)
+{
+    public string GetCommandPath(string commandName);
+    public bool IsManagedCommand(string content);
+}
+public static class AgentTargets
+{
+    public static IEnumerable<string> CommandNames { get; }
+    public static AgentTarget For(string agent, string baseFolder);   // "claude" | "codex" | "cursor"
+}
 public static class TemplateRenderer
 {
     public static string ReadTemplate(string commandName);            // "save-context", "get-context", "list-contexts", "remove-context"
-    public static string Render(string template, AgentTarget target); // replaces {{tool}} {{args}} {{agent}}
+    public static string Render(string commandName, AgentTarget target); // loads and renders an embedded command
 }
 ```
 
@@ -813,7 +821,7 @@ public void Template_FirstLine_IsTheMarker(string name) =>
 
 [Fact] public void Render_Save_ReplacesAllPlaceholders_AndSetsAgent()
 {
-    var text = TemplateRenderer.Render(TemplateRenderer.ReadTemplate("save-context"), AgentTargets.For("claude", baseFolder));
+    var text = TemplateRenderer.Render("save-context", AgentTargets.For("claude", baseFolder));
     Assert.DoesNotContain("{{", text);
     Assert.Contains("`agent` set to `claude`", text);
 }
@@ -853,7 +861,7 @@ The raw templates begin with the managed marker. The Codex renderer places skill
 - Test: `tests/ContextGuru.Tests/InstallerTests.cs`
 
 **Interfaces:**
-- Consumes: Task 11 types.
+- Consumes: `AgentTargets.CommandNames`, `AgentTarget.GetCommandPath`, `AgentTarget.IsManagedCommand`, and `TemplateRenderer.Render(commandName, target)` from Task 11.
 - Produces:
 
 ```csharp
@@ -872,7 +880,9 @@ Backups are `<file>.bak`, then `.bak.1`, `.bak.2`. Config writes go to a temp fi
 [Fact] public void Install_WritesMarkedFiles_AndRegistersServer()
 {
     new Installer(t.Path).Install("claude");
-    foreach (var f in CommandFiles("claude")) Assert.StartsWith("<!-- contextguru:managed v1 -->", File.ReadAllText(f));
+    var target = AgentTargets.For("claude", t.Path);
+    foreach (var name in AgentTargets.CommandNames)
+        Assert.True(target.IsManagedCommand(File.ReadAllText(target.GetCommandPath(name))));
     var entry = ReadConfig("claude")["mcpServers"]!["contextguru"]!;     // exact path and key per AgentTargets
     Assert.Equal("contextguru", (string)entry["command"]!);
 }
@@ -900,7 +910,7 @@ Expected: FAIL to build, `Installer` does not exist.
 
 - [ ] **Step 3: Green. Implement per the spec's Installation section**
 
-Parse config first and stop before any write if it fails. A file counts as installer-created if its first line is the marker. A missing config is created containing only the `contextguru` entry (command `contextguru`, no arguments).
+Parse config first and stop before any write if it fails. Use the Task 11 APIs for command names, paths, rendering, and ownership checks during install and uninstall. Create the parent folder for each command file. Claude Code and Cursor use flat `cg-<name>.md` files with the marker on the first line. Codex uses `cg-<name>/SKILL.md` with the marker immediately after the closing YAML delimiter. A missing config is created containing only the `contextguru` entry (command `contextguru`, no arguments).
 
 - [ ] **Step 4: Verify green**
 
