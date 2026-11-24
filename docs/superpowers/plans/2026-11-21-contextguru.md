@@ -746,7 +746,7 @@ As built: `SqliteContextStore.GetDatabasePath` was extracted so `--doctor` resol
 **Interfaces:**
 - Consumes: the complete server (Tasks 6 to 8).
 
-- [ ] **Step 1: Red. Write the two tests**
+- [x] **Step 1: Red. Write the two tests**
 
 ```csharp
 [Fact] public async Task TwoProcesses_Write25EachToSameDatabase_AllRowsExist_NoBusyErrors()
@@ -759,24 +759,26 @@ As built: `SqliteContextStore.GetDatabasePath` was extracted so `--doctor` resol
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 The code already exists, so prove the tests can fail: temporarily set `PRAGMA busy_timeout=0` and `Default Timeout=0` in `Migrations.Open`.
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~TwoProcesses"`
 Expected: FAIL with "Database busy, retry." in at least one test.
 
-- [ ] **Step 3: Green. Revert the temporary change**
+- [x] **Step 3: Green. Revert the temporary change**
 
 Restore the 5-second values in `Migrations.Open`. No other code change is expected. If a test still fails, find the root cause before changing anything and take it to the author.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Move the shared "start two clients" code into a helper in `ServerProcess.cs`. Re-run, `dotnet format`. Commit: "Add concurrency tests".
+
+As built: `DefaultTimeout = 0` means infinite timeout in `Microsoft.Data.Sqlite` (not 0 ms), so Step 2 RED was verified with `DefaultTimeout = 1`, `PRAGMA busy_timeout=0`, and `BeginTransaction(deferred: true)` in `SqliteContextStore.ExecuteWrite` (which failed with `"Database busy, retry."`), then all `src/` changes were reverted. Added `ServerSession.StartPairAsync` in `ServerProcess.cs` and two controlled lock-overlap tests (`Save_WaitsForHeldWriteLock_AndSucceedsAfterRelease` and `TwoProcessesStartedTogether_WhenMigrationLockHeld_BothWaitAndSucceed`) alongside the two multi-process tests.
 
 ---
 
