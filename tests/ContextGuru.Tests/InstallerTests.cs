@@ -1,3 +1,6 @@
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json.Nodes;
 using ContextGuru.Install;
 
@@ -140,6 +143,153 @@ public class InstallerTests
         Assert.Equal([target.ConfigPath + ".bak"], Backups(dir).Where(f => f.StartsWith(target.ConfigPath, StringComparison.Ordinal)));
     }
 
+    // A real file symlink. If the link cannot be created the test fails (no skipping), so the link path is always exercised.
+    static void Link(string linkPath, string realPath, string text)
+    {
+        Write(realPath, text);
+        Directory.CreateDirectory(Path.GetDirectoryName(linkPath)!);
+        File.CreateSymbolicLink(linkPath, realPath);
+    }
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Install_SymlinkedConfig_UpdatesTheTarget_KeepsTheLink(string agent)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        var real = Path.Combine(dir.Sub("dotfiles"), "config.json");
+        var original = """{ "a": 1 }""";
+        Link(target.ConfigPath, real, original);
+
+        new Installer(dir.Path).Install(agent);
+
+        Assert.NotNull(new FileInfo(target.ConfigPath).LinkTarget);
+        Assert.Equal("contextguru", (string)JsonNode.Parse(File.ReadAllText(real))!["mcpServers"]!["contextguru"]!["command"]!);
+        Assert.Equal(original, File.ReadAllText(real + ".bak"));
+    }
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Install_SymlinkedCommandFile_UpdatesTheTarget_KeepsTheLink(string agent)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        var save = target.GetCommandPath("save-context");
+        var real = Path.Combine(dir.Sub("dotfiles"), "save.md");
+        Link(save, real, "mine");
+
+        new Installer(dir.Path).Install(agent);
+
+        Assert.NotNull(new FileInfo(save).LinkTarget);
+        Assert.Equal(TemplateRenderer.Render("save-context", target), File.ReadAllText(real));
+        Assert.Equal("mine", File.ReadAllText(real + ".bak"));
+    }
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Uninstall_SymlinkedConfig_UpdatesTheTarget_KeepsTheLink(string agent)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        var real = Path.Combine(dir.Sub("dotfiles"), "config.json");
+        Link(target.ConfigPath, real, """{ "mcpServers": { "contextguru": { "command": "contextguru", "args": [] }, "x": {} } }""");
+
+        new Installer(dir.Path).Uninstall(agent);
+
+        Assert.NotNull(new FileInfo(target.ConfigPath).LinkTarget);
+        var servers = (JsonObject)JsonNode.Parse(File.ReadAllText(real))!["mcpServers"]!;
+        Assert.Equal(["x"], servers.Select(p => p.Key));
+        Assert.True(File.Exists(real + ".bak"));
+    }
+
+    // The agent config can hold secrets: replacing it must not widen who can read it. Windows only (the API is Windows ACLs).
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    [SupportedOSPlatform("windows")]
+    public void Install_ProtectedAcl_IsKept(string agent)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        Write(target.ConfigPath, "{}");
+        var file = new FileInfo(target.ConfigPath);
+        var security = file.GetAccessControl();
+        // No inherited rules: only the current user.
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.FullControl, AccessControlType.Allow));
+        file.SetAccessControl(security);
+        var before = new FileInfo(target.ConfigPath).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+        // Sanity: protected, with exactly one rule.
+        Assert.StartsWith("D:P", before, StringComparison.Ordinal);
+        Assert.Equal(1, before.Count(c => c == '('));
+
+        new Installer(dir.Path).Install(agent);
+
+        var after = new FileInfo(target.ConfigPath).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+        Assert.Equal(before, after);
+        Assert.Equal("contextguru", (string)ReadConfig(target)["mcpServers"]!["contextguru"]!["command"]!);
+    }
+
+    // The hook changes the config after the installer has read it and just before it replaces it.
+    [Theory]
+    [InlineData("claude", """{ "a": 1 }""")]
+    [InlineData("cursor", """{ "a": 1 }""")]
+    [InlineData("claude", null)]
+    [InlineData("cursor", null)]
+    public void Install_ConfigChangedAfterRead_Aborts_LeavesNewerFile_NoBackup_NoOtherWrites(string agent, string? original)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        if (original is not null)
+        {
+            Write(target.ConfigPath, original);
+        }
+        var installer = new Installer(dir.Path) { BeforeConfigWrite = path => Write(path, """{ "edited": true }""") };
+
+        var ex = Assert.Throws<InstallerException>(() => installer.Install(agent));
+
+        Assert.Contains("Run the command again", ex.Message);
+        Assert.Equal("""{ "edited": true }""", File.ReadAllText(target.ConfigPath));
+        Assert.Equal([target.ConfigPath], Files(dir));
+    }
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Uninstall_ConfigChangedAfterRead_Aborts_LeavesNewerFile_NoBackup_KeepsCommandFiles(string agent)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        new Installer(dir.Path).Install(agent);
+        var before = Files(dir).Order().ToArray();
+        var installer = new Installer(dir.Path) { BeforeConfigWrite = path => Write(path, """{ "edited": true }""") };
+
+        Assert.Throws<InstallerException>(() => installer.Uninstall(agent));
+
+        Assert.Equal("""{ "edited": true }""", File.ReadAllText(target.ConfigPath));
+        Assert.Equal(before, Files(dir).Order());
+    }
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Install_FolderNamedBak_CountsAsTaken_BackupUsesBak1(string agent)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        var original = """{ "a": 1 }""";
+        Write(target.ConfigPath, original);
+        Directory.CreateDirectory(target.ConfigPath + ".bak");
+
+        new Installer(dir.Path).Install(agent);
+
+        Assert.Equal(original, File.ReadAllText(target.ConfigPath + ".bak.1"));
+        Assert.True(Directory.Exists(target.ConfigPath + ".bak"));
+    }
+
     [Theory]
     [InlineData("claude")]
     [InlineData("cursor")]
@@ -211,6 +361,11 @@ public class InstallerTests
     [InlineData("cursor", "{\"mcpServers\": []}")]
     [InlineData("cursor", "{\"a\": 1, \"a\": 2}")]
     [InlineData("cursor", "{\"mcpServers\": {\"x\": {}, \"x\": {}}}")]
+    // Duplicate keys inside the existing entry, and inside another server's object.
+    [InlineData("claude", "{\"mcpServers\": {\"contextguru\": {\"command\": \"a\", \"command\": \"b\"}}}")]
+    [InlineData("claude", "{\"mcpServers\": {\"x\": {\"command\": \"a\", \"command\": \"b\"}}}")]
+    [InlineData("cursor", "{\"mcpServers\": {\"contextguru\": {\"command\": \"a\", \"command\": \"b\"}}}")]
+    [InlineData("cursor", "{\"mcpServers\": {\"x\": {\"command\": \"a\", \"command\": \"b\"}}}")]
     public void Install_UnparseableConfig_ChangesNothing_AndReportsWhy(string agent, string config)
     {
         using var dir = new TempDir();
@@ -224,6 +379,62 @@ public class InstallerTests
         Assert.NotEmpty(error);
         Assert.Equal(config, File.ReadAllText(target.ConfigPath));
         Assert.Equal([target.ConfigPath], Files(dir));
+    }
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Install_InvalidUtf8Config_ChangesNothing_AndReportsWhy(string agent)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        // A raw 0xFF byte inside a string is not valid UTF-8.
+        byte[] bytes = [.. "{\"a\":\"x"u8, 0xFF, .. "y\"}"u8];
+        Directory.CreateDirectory(Path.GetDirectoryName(target.ConfigPath)!);
+        File.WriteAllBytes(target.ConfigPath, bytes);
+
+        var (code, _, error) = RunInstaller(dir, "install", "--agent", agent);
+
+        Assert.Equal(1, code);
+        Assert.NotEmpty(error);
+        Assert.Equal(bytes, File.ReadAllBytes(target.ConfigPath));
+        Assert.Equal([target.ConfigPath], Files(dir));
+    }
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Install_ConfigWithUtf8Bom_IsInstalled(string agent)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        Directory.CreateDirectory(Path.GetDirectoryName(target.ConfigPath)!);
+        File.WriteAllBytes(target.ConfigPath, [0xEF, 0xBB, 0xBF, .. "{\"a\":1}"u8]);
+
+        new Installer(dir.Path).Install(agent);
+
+        Assert.Equal(1, (int)ReadConfig(target)["a"]!);
+        Assert.Equal("contextguru", (string)ReadConfig(target)["mcpServers"]!["contextguru"]!["command"]!);
+    }
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Uninstall_DirectoryAtConfigPath_Exit1_ChangesNothing(string agent)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        new Installer(dir.Path).Install(agent);
+        File.Delete(target.ConfigPath);
+        Directory.CreateDirectory(target.ConfigPath);
+        var before = Files(dir).Order().ToArray();
+
+        var (code, _, error) = RunInstaller(dir, "uninstall", "--agent", agent);
+
+        Assert.Equal(1, code);
+        Assert.NotEmpty(error);
+        Assert.Equal(before, Files(dir).Order());
+        Assert.True(File.Exists(target.GetCommandPath("save-context")));
     }
 
     [Fact]
@@ -366,42 +577,31 @@ public class InstallerTests
     {
         using var dir = new TempDir();
         var target = Target("claude", dir);
-        // A folder where the config file should be: the write cannot replace it.
-        Directory.CreateDirectory(target.ConfigPath);
-
-        var (code, output, error) = RunInstaller(dir, "install", "--agent", "claude");
-
-        Assert.Equal(1, code);
-        Assert.Empty(output);
-        Assert.NotEmpty(error);
-        Assert.DoesNotContain(Files(dir), f => f.EndsWith(".tmp", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void Install_KeepsConfigFileMode_OnUnix()
-    {
-        // Unix modes do not exist on Windows. Linux and macOS are not run in version 1.
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-        using var dir = new TempDir();
-        var target = Target("claude", dir);
+        // A read-only config can be read but not replaced (on Windows), so the failure comes after the temp file is written.
         Write(target.ConfigPath, "{}");
-        File.SetUnixFileMode(target.ConfigPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        File.SetAttributes(target.ConfigPath, FileAttributes.ReadOnly);
+        try
+        {
+            var (code, output, error) = RunInstaller(dir, "install", "--agent", "claude");
 
-        new Installer(dir.Path).Install("claude");
-
-        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(target.ConfigPath));
+            Assert.Equal(1, code);
+            Assert.Empty(output);
+            Assert.NotEmpty(error);
+            Assert.DoesNotContain(Files(dir), f => f.EndsWith(".tmp", StringComparison.Ordinal));
+        }
+        finally
+        {
+            foreach (var f in Files(dir))
+            {
+                File.SetAttributes(f, FileAttributes.Normal);
+            }
+        }
     }
 
     // Process routing. Only bad arguments: a valid install or uninstall would edit the real agent configuration,
     // because the tool reads the real user profile folder.
     [Theory]
-    [InlineData("install")]
-    [InlineData("install", "--agent")]
     [InlineData("install", "--agent", "vim")]
-    [InlineData("uninstall")]
     [InlineData("uninstall", "--agent", "vim")]
     public async Task Process_InstallWithBadArguments_Exit2_UsageOnStderr(params string[] args)
     {

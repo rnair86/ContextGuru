@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -9,8 +10,17 @@ public sealed class InstallerException(string message) : Exception(message);
 
 public sealed class Installer(string baseFolder)
 {
+    // Test hook, called just before the config is re-checked and replaced. Lets a test change the file at that moment.
+    internal Action<string>? BeforeConfigWrite { get; init; }
+
     const string ServerName = "contextguru";
     const string Usage = "Usage: contextguru install|uninstall --agent claude|codex|cursor";
+
+    // Invalid bytes must fail the parse: the default decoder would turn them into U+FFFD and the rewrite would keep that.
+    static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);
+
+    // Duplicate keys anywhere in the file are a parse failure: JsonNode would otherwise keep or lose one silently.
+    static readonly JsonDocumentOptions ParseOptions = new() { AllowDuplicateProperties = false };
 
     // Relaxed escaping keeps characters such as < > & ' and non-ASCII text as the user wrote them.
     static readonly JsonSerializerOptions JsonOptions = new()
@@ -24,8 +34,9 @@ public sealed class Installer(string baseFolder)
     {
         var target = GetJsonTarget(agent);
         // Parse first: a bad configuration must stop everything before any write.
-        var config = ReadConfig(target.ConfigPath);
-        var root = config ?? new JsonObject();
+        var configPath = ResolveLink(target.ConfigPath);
+        var config = ReadConfig(configPath);
+        var root = config?.Root ?? new JsonObject();
         var servers = GetServers(root);
         var entry = new JsonObject { ["command"] = ServerName, ["args"] = new JsonArray() };
 
@@ -37,12 +48,12 @@ public sealed class Installer(string baseFolder)
                 root["mcpServers"] = servers;
             }
             servers[ServerName] = entry;
-            WriteConfig(target.ConfigPath, root, backup: config is not null);
+            WriteConfig(configPath, root, config?.Text);
         }
 
         foreach (var name in AgentTargets.CommandNames)
         {
-            var path = target.GetCommandPath(name);
+            var path = ResolveLink(target.GetCommandPath(name));
             var text = TemplateRenderer.Render(name, target);
             var existing = File.Exists(path) ? File.ReadAllText(path) : null;
             if (existing == text)
@@ -61,11 +72,12 @@ public sealed class Installer(string baseFolder)
     public void Uninstall(string agent)
     {
         var target = GetJsonTarget(agent);
-        var config = ReadConfig(target.ConfigPath);
+        var configPath = ResolveLink(target.ConfigPath);
+        var config = ReadConfig(configPath);
 
-        if (config is not null && GetServers(config) is { } servers && servers.Remove(ServerName))
+        if (config is not null && GetServers(config.Root) is { } servers && servers.Remove(ServerName))
         {
-            WriteConfig(target.ConfigPath, config, backup: true);
+            WriteConfig(configPath, config.Root, config.Text);
         }
 
         foreach (var name in AgentTargets.CommandNames)
@@ -118,27 +130,50 @@ public sealed class Installer(string baseFolder)
             : throw new InstallerException($"{agent} is not supported yet: its configuration is TOML.");
     }
 
-    // Returns null when the file does not exist. Anything that is not a JSON object with an object-valued mcpServers is rejected.
-    static JsonObject? ReadConfig(string path)
+    // A replace would swap the link itself and leave its target alone: work on the final target instead.
+    static string ResolveLink(string path) =>
+        Path.Exists(path) ? File.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName ?? path : path;
+
+    // The parsed configuration with the exact text it was read from.
+    sealed record ConfigFile(string Text, JsonObject Root);
+
+    // Returns null when nothing exists at the path. A folder there is not "missing": reading it fails.
+    static string? ReadText(string path)
     {
-        if (!File.Exists(path))
+        if (!Path.Exists(path))
         {
             return null;
         }
 
         try
         {
-            var root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject
-                ?? throw new InstallerException($"{path} is not a JSON object. Nothing was changed.");
-            // JsonNode reads objects lazily: duplicate keys only throw ArgumentException on first access.
-            if (root.TryGetPropertyValue("mcpServers", out var servers))
-            {
-                _ = (servers as JsonObject)?.Count
-                    ?? throw new InstallerException($"mcpServers in {path} is not a JSON object. Nothing was changed.");
-            }
-            return root;
+            return File.ReadAllText(path, StrictUtf8);
         }
-        catch (Exception e) when (e is JsonException or ArgumentException)
+        catch (DecoderFallbackException)
+        {
+            throw new InstallerException($"{path} is not valid UTF-8. Nothing was changed.");
+        }
+    }
+
+    // Returns null when the file does not exist. Anything that is not a JSON object with an object-valued mcpServers is rejected.
+    static ConfigFile? ReadConfig(string path)
+    {
+        if (ReadText(path) is not { } text)
+        {
+            return null;
+        }
+
+        try
+        {
+            var root = JsonNode.Parse(text, documentOptions: ParseOptions) as JsonObject
+                ?? throw new InstallerException($"{path} is not a JSON object. Nothing was changed.");
+            if (root.TryGetPropertyValue("mcpServers", out var servers) && servers is not JsonObject)
+            {
+                throw new InstallerException($"mcpServers in {path} is not a JSON object. Nothing was changed.");
+            }
+            return new ConfigFile(text, root);
+        }
+        catch (JsonException e)
         {
             throw new InstallerException($"Cannot parse {path}: {e.Message} Nothing was changed.");
         }
@@ -147,9 +182,15 @@ public sealed class Installer(string baseFolder)
     // ReadConfig has already checked the shape.
     static JsonObject? GetServers(JsonObject root) => root["mcpServers"] as JsonObject;
 
-    static void WriteConfig(string path, JsonObject root, bool backup)
+    void WriteConfig(string path, JsonObject root, string? originalText)
     {
-        if (backup)
+        BeforeConfigWrite?.Invoke(path);
+        // Re-read just before the replace, so an edit made since we read it is not lost. This narrows the window, it does not close it.
+        if (ReadText(path) != originalText)
+        {
+            throw new InstallerException($"{path} changed while it was being updated. Run the command again.");
+        }
+        if (originalText is not null)
         {
             Backup(path);
         }
@@ -160,27 +201,40 @@ public sealed class Installer(string baseFolder)
     static void Backup(string path)
     {
         var backup = path + ".bak";
-        for (var i = 1; File.Exists(backup); i++)
+        for (var i = 1; Path.Exists(backup); i++)
         {
             backup = $"{path}.bak.{i}";
         }
         File.Copy(path, backup);
     }
 
-    // Writes a temp file next to the target, then moves it over the target.
+    // Writes a temp file next to the target, then replaces the target with it. When the target exists, File.Replace keeps its
+    // permissions (the Windows ACL) and the Unix create mode keeps its mode (it can only be stricter after the umask).
+    // On Windows the temp file briefly has the folder's inherited permissions.
     static void WriteAtomically(string path, string text)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = $"{path}.{Guid.NewGuid():N}.tmp";
+        var exists = File.Exists(path);
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
+        if (exists && !OperatingSystem.IsWindows())
+        {
+            options.UnixCreateMode = File.GetUnixFileMode(path);
+        }
         try
         {
-            File.WriteAllText(temp, text);
-            if (!OperatingSystem.IsWindows() && File.Exists(path))
+            using (var stream = new FileStream(temp, options))
             {
-                // The agent configuration can hold secrets: the replacement keeps the old permissions.
-                File.SetUnixFileMode(temp, File.GetUnixFileMode(path));
+                stream.Write(Encoding.UTF8.GetBytes(text));
             }
-            File.Move(temp, path, overwrite: true);
+            if (exists)
+            {
+                File.Replace(temp, path, destinationBackupFileName: null);
+            }
+            else
+            {
+                File.Move(temp, path);
+            }
         }
         finally
         {
