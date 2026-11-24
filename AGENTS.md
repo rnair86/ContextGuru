@@ -100,7 +100,7 @@ Confirmed by the spike (details in `docs/spike.md`):
 - A fresh SQLite connection has `busy_timeout` 0, so set the pragma on every connection.
 - Only Claude Code supports MCP roots. Codex and Cursor start the server in the project folder, so `projectPath` and the working folder cover them.
 - Codex commands are skills (`.agents/skills/<name>/SKILL.md`, run as `$<name>`), not `/name` prompts. Cursor and Claude Code use `/name` command files. Codex and Cursor have no argument placeholder, so a command body must say exactly what to pass to the tool.
-- Codex MCP config is TOML (`~/.codex/config.toml`). No TOML package is needed. Decide in Task 13 between `codex mcp add` and a text append.
+- Codex MCP config is TOML (`~/.codex/config.toml`). No TOML package is needed: the installer runs `codex mcp add` and `codex mcp remove` with `CODEX_HOME` set to the target config folder (Task 13). Never run codex in tests without it.
 
 Learned while building Tasks 2 and 3:
 

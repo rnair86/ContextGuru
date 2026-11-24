@@ -13,6 +13,9 @@ public sealed class Installer(string baseFolder)
     // Test hook, called once the config's temp file is written, just before the re-check and the replace. Lets a test change the file at that moment.
     internal Action<string>? BeforeConfigWrite { get; init; }
 
+    // Test hook: the value searched for codex instead of the PATH environment variable.
+    internal string? CodexSearchPath { get; init; }
+
     const string ServerName = "contextguru";
     const string Usage = "Usage: contextguru install|uninstall --agent claude|codex|cursor";
 
@@ -32,7 +35,33 @@ public sealed class Installer(string baseFolder)
     /// <summary>Writes the marked command files and adds or replaces only the "contextguru" server entry.</summary>
     public void Install(string agent)
     {
-        var target = GetJsonTarget(agent);
+        var target = AgentTargets.For(agent, baseFolder);
+        // The config comes first: a bad configuration must stop everything before the command files are written.
+        if (target.ConfigFormat == ConfigFormat.Toml)
+        {
+            InstallCodexEntry(target);
+        }
+        else
+        {
+            InstallJsonEntry(target);
+        }
+
+        foreach (var name in AgentTargets.CommandNames)
+        {
+            var path = ResolveLink(target.GetCommandPath(name));
+            var text = TemplateRenderer.Render(name, target);
+            var existing = File.Exists(path) ? File.ReadAllText(path) : null;
+            if (existing == text)
+            {
+                continue;
+            }
+            // An existing file that is not ours is kept as a backup.
+            WriteAtomically(path, text, backup: existing is not null && !target.IsManagedCommand(existing));
+        }
+    }
+
+    void InstallJsonEntry(AgentTarget target)
+    {
         // Parse first: a bad configuration must stop everything before any write.
         var configPath = ResolveLink(target.ConfigPath);
         var config = ReadConfig(configPath);
@@ -50,31 +79,34 @@ public sealed class Installer(string baseFolder)
             servers[ServerName] = entry;
             WriteConfig(configPath, root, config?.Bytes);
         }
+    }
 
-        foreach (var name in AgentTargets.CommandNames)
+    // Codex owns its TOML: ask the codex CLI to add the entry. An entry that is already right is left alone, extra keys included.
+    void InstallCodexEntry(AgentTarget target)
+    {
+        var codex = NewCodexConfig(target);
+        Directory.CreateDirectory(Path.GetDirectoryName(target.ConfigPath)!);
+        if (!codex.IsRegistered())
         {
-            var path = ResolveLink(target.GetCommandPath(name));
-            var text = TemplateRenderer.Render(name, target);
-            var existing = File.Exists(path) ? File.ReadAllText(path) : null;
-            if (existing == text)
-            {
-                continue;
-            }
-            // An existing file that is not ours is kept as a backup.
-            WriteAtomically(path, text, backup: existing is not null && !target.IsManagedCommand(existing));
+            RunWithBackup(target.ConfigPath, codex.Add);
         }
     }
 
     /// <summary>Removes the marked command files and the "contextguru" server entry. Everything else stays.</summary>
     public void Uninstall(string agent)
     {
-        var target = GetJsonTarget(agent);
-        var configPath = ResolveLink(target.ConfigPath);
-        var config = ReadConfig(configPath);
-
-        if (config is not null && GetServers(config.Root) is { } servers && servers.Remove(ServerName))
+        var target = AgentTargets.For(agent, baseFolder);
+        if (target.ConfigFormat == ConfigFormat.Toml)
         {
-            WriteConfig(configPath, config.Root, config.Bytes);
+            // No config means nothing is registered, so codex is not needed.
+            if (Path.Exists(target.ConfigPath))
+            {
+                RunWithBackup(target.ConfigPath, NewCodexConfig(target).Remove);
+            }
+        }
+        else
+        {
+            UninstallJsonEntry(target);
         }
 
         foreach (var name in AgentTargets.CommandNames)
@@ -118,13 +150,41 @@ public sealed class Installer(string baseFolder)
         }
     }
 
-    AgentTarget GetJsonTarget(string agent)
+    void UninstallJsonEntry(AgentTarget target)
     {
-        var target = AgentTargets.For(agent, baseFolder);
-        // Codex configuration is TOML, added in a later task. Fail before anything is written.
-        return target.ConfigFormat == ConfigFormat.Json
-            ? target
-            : throw new InstallerException($"{agent} is not supported yet: its configuration is TOML.");
+        var configPath = ResolveLink(target.ConfigPath);
+        var config = ReadConfig(configPath);
+
+        if (config is not null && GetServers(config.Root) is { } servers && servers.Remove(ServerName))
+        {
+            WriteConfig(configPath, config.Root, config.Bytes);
+        }
+    }
+
+    // CODEX_HOME is the folder of the config, so codex only ever edits the config we were given.
+    CodexConfig NewCodexConfig(AgentTarget target) =>
+        new(CodexConfig.Find(CodexSearchPath ?? Environment.GetEnvironmentVariable("PATH")), Path.GetDirectoryName(target.ConfigPath)!);
+
+    // Codex rewrites the config itself. Take a backup first and drop it if the bytes are the same afterwards (a no-op or a failed run).
+    static void RunWithBackup(string configPath, Action run)
+    {
+        var before = ReadBytes(configPath);
+        var backup = before is null ? null : FreeBackupName(configPath);
+        if (backup is not null)
+        {
+            File.Copy(configPath, backup);
+        }
+        try
+        {
+            run();
+        }
+        finally
+        {
+            if (backup is not null && ReadBytes(configPath) is { } after && after.AsSpan().SequenceEqual(before))
+            {
+                File.Delete(backup);
+            }
+        }
     }
 
     // A replace would swap the link itself and leave its target alone: work on the final target instead.
