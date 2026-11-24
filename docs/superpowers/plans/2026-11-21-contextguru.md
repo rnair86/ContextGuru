@@ -994,7 +994,7 @@ Expected: exit code 0. Ask the author before running `local/install.ps1`, becaus
 
 Make sure the README commands match the scripts and `contextguru --help`-style usage text. Commit: "Add local build scripts and README".
 
-Changed from this plan: install uses `--version <version> --source local/nupkg` instead of `--add-source`, because `--add-source` also searches nuget.org, where anyone could publish a package with this name. The version is read from the project, so an older .nupkg in the folder is never installed. `install.ps1` was not run. Checked instead: the script parses, the version lookup, `dotnet pack`, `dotnet tool install --tool-path` into a temp folder, `--doctor` from that install, and the `dotnet tool list -g` match. Still to be run by the author: the global uninstall and install, and finding `contextguru` on PATH.
+Changed from this plan: install uses `--version <version> --source local/nupkg` instead of `--add-source`, because `--add-source` also searches nuget.org, where anyone could publish a package with this name. The version is read from the project, so an older .nupkg in the folder is never installed. `install.ps1` was run once at af049b0: exit 0, 325 tests passed, ContextGuru 0.1.0 was installed globally (it was not installed before), `contextguru` was found on PATH, and `--doctor` filled every line and passed (database not created yet, write test skipped). The `dotnet tool uninstall -g` step was not exercised, because nothing was installed before.
 
 ---
 

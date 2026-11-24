@@ -21,7 +21,7 @@ local/install.ps1   # build.ps1, then pack and install as a global tool, then --
 
 Both scripts stop at the first failing step. `install.ps1` replaces any installed `ContextGuru` global tool with the version in `src/ContextGuru/ContextGuru.csproj`.
 
-Before upgrading, close the agents that use ContextGuru. If a running server holds the tool, the uninstall step fails and the script stops. If any later step fails, fix the cause and run `install.ps1` again.
+Before upgrading, close the agents that use ContextGuru. If a running server holds the tool, the uninstall step fails and the script stops. If any step fails, fix the cause and run `install.ps1` again.
 
 ## Register with an agent
 
