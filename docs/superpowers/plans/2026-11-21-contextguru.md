@@ -778,6 +778,8 @@ Expected: PASS.
 
 Move the shared "start two clients" code into a helper in `ServerProcess.cs`. Re-run, `dotnet format`. Commit: "Add concurrency tests".
 
+As built: `DefaultTimeout = 0` means infinite timeout in `Microsoft.Data.Sqlite` (not 0 ms), so Step 2 RED was verified with `DefaultTimeout = 1`, `PRAGMA busy_timeout=0`, and `BeginTransaction(deferred: true)` in `SqliteContextStore.ExecuteWrite` (which failed with `"Database busy, retry."`), then all `src/` changes were reverted. Added `ServerSession.StartPairAsync` in `ServerProcess.cs` and two controlled lock-overlap tests (`Save_WaitsForHeldWriteLock_AndSucceedsAfterRelease` and `TwoProcessesStartedTogether_WhenMigrationLockHeld_BothWaitAndSucceed`) alongside the two multi-process tests.
+
 ---
 
 ### Task 11: Command templates and agent targets

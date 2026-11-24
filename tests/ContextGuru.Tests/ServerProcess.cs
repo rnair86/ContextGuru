@@ -130,22 +130,33 @@ public sealed class ServerSession : IAsyncDisposable
 
     public McpClient Client { get; }
 
-    /// <summary>Starts two server processes back-to-back against the same database, then connects both MCP clients in parallel.</summary>
+    /// <summary>Starts two server processes concurrently against the same database, then connects both MCP clients in parallel.</summary>
     public static async Task<(ServerSession First, ServerSession Second)> StartPairAsync(
         string dbPath,
         string? workingFolderA = null,
         string? workingFolderB = null,
         TimeSpan? timeout = null)
     {
-        var serverA = ServerProcess.Start(dbPath, workingFolder: workingFolderA);
+        var startA = Task.Run(() => ServerProcess.Start(dbPath, workingFolder: workingFolderA));
+        var startB = Task.Run(() => ServerProcess.Start(dbPath, workingFolder: workingFolderB));
+        ServerProcess serverA;
         ServerProcess serverB;
         try
         {
-            serverB = ServerProcess.Start(dbPath, workingFolder: workingFolderB);
+            var servers = await Task.WhenAll(startA, startB);
+            serverA = servers[0];
+            serverB = servers[1];
         }
         catch
         {
-            await serverA.DisposeAsync();
+            if (startA.IsCompletedSuccessfully)
+            {
+                await startA.Result.DisposeAsync();
+            }
+            if (startB.IsCompletedSuccessfully)
+            {
+                await startB.Result.DisposeAsync();
+            }
             throw;
         }
 
@@ -173,9 +184,9 @@ public sealed class ServerSession : IAsyncDisposable
     static async Task<ServerSession> ConnectAsync(ServerProcess server, TimeSpan? timeout)
     {
         _ = server.StandardError.ReadToEndAsync();
-        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(30));
         try
         {
+            using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(30));
             var transport = new StreamClientTransport(server.StandardInput.BaseStream, server.StandardOutput.BaseStream);
             var client = await McpClient.CreateAsync(transport, cancellationToken: cts.Token);
             return new ServerSession(server, client);
@@ -193,9 +204,9 @@ public sealed class ServerSession : IAsyncDisposable
         {
             await Client.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
         }
-        catch (TimeoutException)
+        catch (Exception)
         {
-            // Falls through: the process is killed below.
+            // Teardown errors must not mask a test failure; the server process is killed below.
         }
         finally
         {

@@ -648,9 +648,16 @@ public sealed partial class StdioToolTests : IAsyncLifetime
     [Fact]
     public async Task TwoProcesses_Write25EachToSameDatabase_AllRowsExist_NoBusyErrors()
     {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var (a, b) = await ServerSession.StartPairAsync(_db, _dir.Sub("work-a"), _dir.Sub("work-b"));
         await using var _a = a;
         await using var _b = b;
+
+        // Warm up both servers so startup migration finishes before the concurrent write batches begin.
+        var warmup = await Task.WhenAll(
+            a.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: cts.Token).AsTask(),
+            b.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: cts.Token).AsTask());
+        Assert.All(warmup, r => Assert.False(r.IsError == true, Text(r)));
 
         async Task<CallToolResult[]> WriteBatch(McpClient client, string prefix)
         {
@@ -666,7 +673,7 @@ public sealed partial class StdioToolTests : IAsyncLifetime
                         ["name"] = $"{prefix}-{i}",
                         ["projectPath"] = _repo,
                     },
-                    cancellationToken: Timeout());
+                    cancellationToken: cts.Token);
             }
             return results;
         }
@@ -678,7 +685,7 @@ public sealed partial class StdioToolTests : IAsyncLifetime
             Assert.NotEqual("Database busy, retry.", Text(r));
         });
 
-        var list = Json(await a.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: Timeout()));
+        var list = Json(await a.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: cts.Token));
         var actualNames = list.GetProperty("contexts").EnumerateArray().Select(e => e.GetProperty("name").GetString()!).Order().ToArray();
         var expectedNames = Enumerable.Range(0, 25).SelectMany(i => new[] { $"a-{i}", $"b-{i}" }).Order().ToArray();
         Assert.Equal(50, actualNames.Length);
@@ -686,8 +693,53 @@ public sealed partial class StdioToolTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Save_WaitsForHeldWriteLock_AndSucceedsAfterRelease()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        Migrations.Run(_db);
+        await Start();
+        Json(await _client!.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: cts.Token));
+
+        using var holder = Migrations.Open(_db);
+        using (var begin = new SqliteCommand("BEGIN IMMEDIATE", holder))
+        {
+            begin.ExecuteNonQuery();
+        }
+
+        var saveTask = _client.CallToolAsync(
+            "save_context",
+            new Dictionary<string, object?>
+            {
+                ["summary"] = "after lock",
+                ["body"] = Valid,
+                ["name"] = "waited",
+                ["projectPath"] = _repo,
+            },
+            cancellationToken: cts.Token).AsTask();
+
+        try
+        {
+            await Task.Delay(300, cts.Token);
+            Assert.False(saveTask.IsCompleted);
+        }
+        finally
+        {
+            using var rollback = new SqliteCommand("ROLLBACK", holder);
+            rollback.ExecuteNonQuery();
+        }
+
+        var saveResult = await saveTask;
+        Assert.False(saveResult.IsError == true, Text(saveResult));
+
+        var got = Json(await _client.CallToolAsync("get_context", new Dictionary<string, object?> { ["name"] = "waited", ["projectPath"] = _repo }, cancellationToken: cts.Token));
+        Assert.True(got.GetProperty("found").GetBoolean());
+        Assert.Equal("after lock", got.GetProperty("summary").GetString());
+    }
+
+    [Fact]
     public async Task TwoProcessesStartedTogether_OnNewDatabase_BothSucceed_UserVersionLatest()
     {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var freshDb = Path.Combine(_dir.Path, "fresh.db");
         Assert.False(File.Exists(freshDb));
 
@@ -696,8 +748,8 @@ public sealed partial class StdioToolTests : IAsyncLifetime
         await using var _b = b;
 
         var results = await Task.WhenAll(
-            a.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: Timeout()).AsTask(),
-            b.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: Timeout()).AsTask());
+            a.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: cts.Token).AsTask(),
+            b.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: cts.Token).AsTask());
 
         Assert.All(results, r =>
         {
@@ -705,9 +757,64 @@ public sealed partial class StdioToolTests : IAsyncLifetime
             Assert.Equal(0, Json(r).GetProperty("contexts").GetArrayLength());
         });
 
-        using var c = Migrations.Open(freshDb);
+        using var c = Migrations.Open(freshDb, SqliteOpenMode.ReadWrite);
         Assert.Equal(Migrations.Latest, Migrations.ReadUserVersion(c));
         using var wal = new SqliteCommand("PRAGMA journal_mode", c);
         Assert.Equal("wal", (string)wal.ExecuteScalar()!, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task TwoProcessesStartedTogether_WhenMigrationLockHeld_BothWaitAndSucceed()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var lockedDb = Path.Combine(_dir.Path, "locked.db");
+        using var holder = Migrations.Open(lockedDb);
+        Assert.Equal(0, Migrations.ReadUserVersion(holder));
+        using (var begin = new SqliteCommand("BEGIN IMMEDIATE", holder))
+        {
+            begin.ExecuteNonQuery();
+        }
+
+        ServerSession? a = null;
+        ServerSession? b = null;
+        try
+        {
+            try
+            {
+                (a, b) = await ServerSession.StartPairAsync(lockedDb, _dir.Sub("work-a"), _dir.Sub("work-b"));
+                await Task.Delay(300, cts.Token);
+            }
+            finally
+            {
+                using var rollback = new SqliteCommand("ROLLBACK", holder);
+                rollback.ExecuteNonQuery();
+            }
+
+            var results = await Task.WhenAll(
+                a.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: cts.Token).AsTask(),
+                b.Client.CallToolAsync("list_contexts", new Dictionary<string, object?> { ["projectPath"] = _repo }, cancellationToken: cts.Token).AsTask());
+
+            Assert.All(results, r =>
+            {
+                Assert.False(r.IsError == true, Text(r));
+                Assert.Equal(0, Json(r).GetProperty("contexts").GetArrayLength());
+            });
+
+            using var c = Migrations.Open(lockedDb, SqliteOpenMode.ReadWrite);
+            Assert.Equal(Migrations.Latest, Migrations.ReadUserVersion(c));
+            using var wal = new SqliteCommand("PRAGMA journal_mode", c);
+            Assert.Equal("wal", (string)wal.ExecuteScalar()!, StringComparer.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (a is not null)
+            {
+                await a.DisposeAsync();
+            }
+            if (b is not null)
+            {
+                await b.DisposeAsync();
+            }
+        }
     }
 }
