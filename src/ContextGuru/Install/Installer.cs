@@ -10,7 +10,7 @@ public sealed class InstallerException(string message) : Exception(message);
 
 public sealed class Installer(string baseFolder)
 {
-    // Test hook, called just before the config is re-checked and replaced. Lets a test change the file at that moment.
+    // Test hook, called once the config's temp file is written, just before the re-check and the replace. Lets a test change the file at that moment.
     internal Action<string>? BeforeConfigWrite { get; init; }
 
     const string ServerName = "contextguru";
@@ -48,7 +48,7 @@ public sealed class Installer(string baseFolder)
                 root["mcpServers"] = servers;
             }
             servers[ServerName] = entry;
-            WriteConfig(configPath, root, config?.Text);
+            WriteConfig(configPath, root, config?.Bytes);
         }
 
         foreach (var name in AgentTargets.CommandNames)
@@ -60,11 +60,8 @@ public sealed class Installer(string baseFolder)
             {
                 continue;
             }
-            if (existing is not null && !target.IsManagedCommand(existing))
-            {
-                Backup(path);
-            }
-            WriteAtomically(path, text);
+            // An existing file that is not ours is kept as a backup.
+            WriteAtomically(path, text, backup: existing is not null && !target.IsManagedCommand(existing));
         }
     }
 
@@ -77,7 +74,7 @@ public sealed class Installer(string baseFolder)
 
         if (config is not null && GetServers(config.Root) is { } servers && servers.Remove(ServerName))
         {
-            WriteConfig(configPath, config.Root, config.Text);
+            WriteConfig(configPath, config.Root, config.Bytes);
         }
 
         foreach (var name in AgentTargets.CommandNames)
@@ -134,20 +131,35 @@ public sealed class Installer(string baseFolder)
     static string ResolveLink(string path) =>
         Path.Exists(path) ? File.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName ?? path : path;
 
-    // The parsed configuration with the exact text it was read from.
-    sealed record ConfigFile(string Text, JsonObject Root);
+    // The parsed configuration with the exact bytes it was read from.
+    sealed record ConfigFile(byte[] Bytes, JsonObject Root);
 
     // Returns null when nothing exists at the path. A folder there is not "missing": reading it fails.
-    static string? ReadText(string path)
+    static byte[]? ReadBytes(string path) => Path.Exists(path) ? File.ReadAllBytes(path) : null;
+
+    // Returns null when the file does not exist. Anything that is not a JSON object with an object-valued mcpServers is rejected.
+    static ConfigFile? ReadConfig(string path)
     {
-        if (!Path.Exists(path))
+        if (ReadBytes(path) is not { } bytes)
         {
             return null;
         }
 
         try
         {
-            return File.ReadAllText(path, StrictUtf8);
+            // Decode the bytes ourselves: File.ReadAllText switches to a lenient decoder when it finds a BOM.
+            var utf8 = bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble) ? bytes.AsSpan(Encoding.UTF8.Preamble.Length) : bytes;
+            var root = JsonNode.Parse(StrictUtf8.GetString(utf8), documentOptions: ParseOptions) as JsonObject
+                ?? throw new InstallerException($"{path} is not a JSON object. Nothing was changed.");
+            if (root.TryGetPropertyValue("mcpServers", out var servers) && servers is not JsonObject)
+            {
+                throw new InstallerException($"mcpServers in {path} is not a JSON object. Nothing was changed.");
+            }
+            return new ConfigFile(bytes, root);
+        }
+        catch (JsonException e)
+        {
+            throw new InstallerException($"Cannot parse {path}: {e.Message} Nothing was changed.");
         }
         catch (DecoderFallbackException)
         {
@@ -155,63 +167,38 @@ public sealed class Installer(string baseFolder)
         }
     }
 
-    // Returns null when the file does not exist. Anything that is not a JSON object with an object-valued mcpServers is rejected.
-    static ConfigFile? ReadConfig(string path)
-    {
-        if (ReadText(path) is not { } text)
-        {
-            return null;
-        }
-
-        try
-        {
-            var root = JsonNode.Parse(text, documentOptions: ParseOptions) as JsonObject
-                ?? throw new InstallerException($"{path} is not a JSON object. Nothing was changed.");
-            if (root.TryGetPropertyValue("mcpServers", out var servers) && servers is not JsonObject)
-            {
-                throw new InstallerException($"mcpServers in {path} is not a JSON object. Nothing was changed.");
-            }
-            return new ConfigFile(text, root);
-        }
-        catch (JsonException e)
-        {
-            throw new InstallerException($"Cannot parse {path}: {e.Message} Nothing was changed.");
-        }
-    }
-
     // ReadConfig has already checked the shape.
     static JsonObject? GetServers(JsonObject root) => root["mcpServers"] as JsonObject;
 
-    void WriteConfig(string path, JsonObject root, string? originalText)
-    {
-        BeforeConfigWrite?.Invoke(path);
-        // Re-read just before the replace, so an edit made since we read it is not lost. This narrows the window, it does not close it.
-        if (ReadText(path) != originalText)
+    void WriteConfig(string path, JsonObject root, byte[]? original) =>
+        WriteAtomically(path, root.ToJsonString(JsonOptions), backup: original is not null, beforeReplace: () =>
         {
-            throw new InstallerException($"{path} changed while it was being updated. Run the command again.");
-        }
-        if (originalText is not null)
-        {
-            Backup(path);
-        }
-        WriteAtomically(path, root.ToJsonString(JsonOptions));
-    }
+            BeforeConfigWrite?.Invoke(path);
+            // Compare the raw bytes with what we read, so an edit made since then is not lost. This narrows the window, it does not close it.
+            var current = ReadBytes(path);
+            var unchanged = current is null || original is null ? current == original : current.AsSpan().SequenceEqual(original);
+            if (!unchanged)
+            {
+                throw new InstallerException($"{path} changed while it was being updated. Run the command again.");
+            }
+        });
 
-    // Copies to path.bak, or .bak.1, .bak.2 and so on. Never overwrites a backup.
-    static void Backup(string path)
+    // path.bak, or .bak.1, .bak.2 and so on: the first name nothing exists at, so a backup is never overwritten.
+    static string FreeBackupName(string path)
     {
         var backup = path + ".bak";
         for (var i = 1; Path.Exists(backup); i++)
         {
             backup = $"{path}.bak.{i}";
         }
-        File.Copy(path, backup);
+        return backup;
     }
 
-    // Writes a temp file next to the target, then replaces the target with it. When the target exists, File.Replace keeps its
-    // permissions (the Windows ACL) and the Unix create mode keeps its mode (it can only be stricter after the umask).
-    // On Windows the temp file briefly has the folder's inherited permissions.
-    static void WriteAtomically(string path, string text)
+    // Writes a temp file next to the target, then puts it in place. With a backup, one File.Replace call renames the old file to
+    // the backup name and gives the new file the old file's permissions (the Windows ACL), so both keep them.
+    // Without a backup the temp file is moved over the target and keeps the permissions it was created with: on Windows the
+    // folder's inherited ones. On Unix the temp file is created with the old file's mode (it can only be stricter after the umask).
+    static void WriteAtomically(string path, string text, bool backup, Action? beforeReplace = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = $"{path}.{Guid.NewGuid():N}.tmp";
@@ -227,13 +214,19 @@ public sealed class Installer(string baseFolder)
             {
                 stream.Write(Encoding.UTF8.GetBytes(text));
             }
-            if (exists)
+            // Runs with the temp file staged, immediately before the target is replaced or created.
+            beforeReplace?.Invoke();
+            if (!exists)
             {
-                File.Replace(temp, path, destinationBackupFileName: null);
+                File.Move(temp, path);
+            }
+            else if (backup)
+            {
+                File.Replace(temp, path, FreeBackupName(path));
             }
             else
             {
-                File.Move(temp, path);
+                File.Move(temp, path, overwrite: true);
             }
         }
         finally

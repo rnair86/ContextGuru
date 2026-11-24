@@ -230,8 +230,18 @@ public class InstallerTests
 
         var after = new FileInfo(target.ConfigPath).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.Access);
         Assert.Equal(before, after);
+        // The backup is the old file, so it keeps the protected ACL too.
+        Assert.Equal(before, new FileInfo(target.ConfigPath + ".bak").GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.Access));
+        Assert.Equal("{}", File.ReadAllText(target.ConfigPath + ".bak"));
         Assert.Equal("contextguru", (string)ReadConfig(target)["mcpServers"]!["contextguru"]!["command"]!);
     }
+
+    // A hook that edits the config once the installer has staged its temp file, just before the replace. Fails if nothing is staged yet.
+    static Action<string> EditWhileStaged(TempDir dir, string text) => path =>
+    {
+        Assert.Contains(Files(dir), f => f.EndsWith(".tmp", StringComparison.Ordinal));
+        Write(path, text);
+    };
 
     // The hook changes the config after the installer has read it and just before it replaces it.
     [Theory]
@@ -247,7 +257,7 @@ public class InstallerTests
         {
             Write(target.ConfigPath, original);
         }
-        var installer = new Installer(dir.Path) { BeforeConfigWrite = path => Write(path, """{ "edited": true }""") };
+        var installer = new Installer(dir.Path) { BeforeConfigWrite = EditWhileStaged(dir, """{ "edited": true }""") };
 
         var ex = Assert.Throws<InstallerException>(() => installer.Install(agent));
 
@@ -265,12 +275,30 @@ public class InstallerTests
         var target = Target(agent, dir);
         new Installer(dir.Path).Install(agent);
         var before = Files(dir).Order().ToArray();
-        var installer = new Installer(dir.Path) { BeforeConfigWrite = path => Write(path, """{ "edited": true }""") };
+        var installer = new Installer(dir.Path) { BeforeConfigWrite = EditWhileStaged(dir, """{ "edited": true }""") };
 
         Assert.Throws<InstallerException>(() => installer.Uninstall(agent));
 
         Assert.Equal("""{ "edited": true }""", File.ReadAllText(target.ConfigPath));
         Assert.Equal(before, Files(dir).Order());
+    }
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Install_ConfigGainsBomAfterRead_Aborts(string agent)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        Write(target.ConfigPath, """{ "a": 1 }""");
+        // Same text, different bytes: only a byte comparison sees it.
+        byte[] withBom = [0xEF, 0xBB, 0xBF, .. """{ "a": 1 }"""u8];
+        var installer = new Installer(dir.Path) { BeforeConfigWrite = path => File.WriteAllBytes(path, withBom) };
+
+        Assert.Throws<InstallerException>(() => installer.Install(agent));
+
+        Assert.Equal(withBom, File.ReadAllBytes(target.ConfigPath));
+        Assert.Equal([target.ConfigPath], Files(dir));
     }
 
     [Theory]
@@ -390,6 +418,25 @@ public class InstallerTests
         var target = Target(agent, dir);
         // A raw 0xFF byte inside a string is not valid UTF-8.
         byte[] bytes = [.. "{\"a\":\"x"u8, 0xFF, .. "y\"}"u8];
+        Directory.CreateDirectory(Path.GetDirectoryName(target.ConfigPath)!);
+        File.WriteAllBytes(target.ConfigPath, bytes);
+
+        var (code, _, error) = RunInstaller(dir, "install", "--agent", agent);
+
+        Assert.Equal(1, code);
+        Assert.NotEmpty(error);
+        Assert.Equal(bytes, File.ReadAllBytes(target.ConfigPath));
+        Assert.Equal([target.ConfigPath], Files(dir));
+    }
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Install_InvalidUtf8AfterBom_ChangesNothing_AndReportsWhy(string agent)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        byte[] bytes = [0xEF, 0xBB, 0xBF, .. "{\"k\":\"x"u8, 0xFF, .. "y\"}"u8];
         Directory.CreateDirectory(Path.GetDirectoryName(target.ConfigPath)!);
         File.WriteAllBytes(target.ConfigPath, bytes);
 
