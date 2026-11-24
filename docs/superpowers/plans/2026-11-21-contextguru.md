@@ -874,7 +874,7 @@ public sealed class Installer(string baseFolder)
 ```
 Backups are `<file>.bak`, then `.bak.1`, `.bak.2`. Config writes go to a temp file, then move. JSON uses `System.Text.Json.Nodes`.
 
-- [ ] **Step 1: Red. Write the tests (all under a temp `baseFolder`)**
+- [x] **Step 1: Red. Write the tests (all under a temp `baseFolder`)**
 
 ```csharp
 [Fact] public void Install_WritesMarkedFiles_AndRegistersServer()
@@ -903,21 +903,21 @@ Backups are `<file>.bak`, then `.bak.1`, `.bak.2`. Config writes go to a temp fi
 public void Run_MissingOrUnknownAgent_Exit2_WithUsageOnError(params string[] args) => Assert.Equal(2, Installer.Run(args, t.Path, new StringWriter(), err));
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~InstallerTests"`
 Expected: FAIL to build, `Installer` does not exist.
 
-- [ ] **Step 3: Green. Implement per the spec's Installation section**
+- [x] **Step 3: Green. Implement per the spec's Installation section**
 
 Parse config first and stop before any write if it fails. Use the Task 11 APIs for command names, paths, rendering, and ownership checks during install and uninstall. Create the parent folder for each command file. Claude Code and Cursor use flat `cg-<name>.md` files with the marker on the first line. Codex uses `cg-<name>/SKILL.md` with the marker immediately after the closing YAML delimiter. A missing config is created containing only the `contextguru` entry (command `contextguru`, no arguments).
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Extract `BackupIfUnmanaged(string path)` and `WriteAtomically(string path, string text)`. Re-run, `dotnet format`. Commit: "Add installer".
 
