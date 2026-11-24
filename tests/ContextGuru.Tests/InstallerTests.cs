@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text;
 using System.Text.Json.Nodes;
 using ContextGuru.Install;
 
@@ -743,6 +744,10 @@ public class InstallerTests
     [InlineData("""{"transport":{"type":"stdio","command":5}}""")]
     [InlineData("{}")]
     [InlineData("null")]
+    // A lone surrogate escape (a backslash and uD800, literally): the stub prints it as is. Decoding the string fails lazily.
+    [InlineData("""{"transport":{"type":"stdio","command":"\uD800","args":[]}}""")]
+    [InlineData("""{"\uD800":1,"transport":{"type":"stdio","command":"contextguru","args":[]}}""")]
+    [InlineData("""{"transport":{"type":"\uD800","command":"contextguru","args":[]}}""")]
     [InlineData("""{"transport":{},"transport":{}}""")]
     [InlineData("""{"transport":{"type":"stdio","command":"contextguru","command":"x","args":[]}}""")]
     [InlineData("""{"transport":{"type":"stdio","command":"contextguru","args":{}}}""")]
@@ -763,7 +768,7 @@ public class InstallerTests
         var ex = Assert.Throws<InstallerException>(() => new Installer(dir.Path) { CodexSearchPath = search }.Install("codex"));
 
         Assert.Contains("codex mcp get", ex.Message);
-        Assert.Equal("[other]\n", File.ReadAllText(target.ConfigPath));
+        Assert.Equal("[other]\n"u8.ToArray(), File.ReadAllBytes(target.ConfigPath));
         Assert.Equal([home, home, "mcp get contextguru --json"], StubCalls(stub));
         Assert.Equal([target.ConfigPath], Files(dir));
     }
@@ -860,7 +865,7 @@ public class InstallerTests
 
         installer.Install("codex");
 
-        Assert.Equal("[other]\n", File.ReadAllText(target.ConfigPath));
+        Assert.Equal("[other]\n"u8.ToArray(), File.ReadAllBytes(target.ConfigPath));
         Assert.Equal([target.ConfigPath + ".bak"], Backups(dir));
         Assert.Equal("tampered", File.ReadAllText(target.ConfigPath + ".bak").Trim());
     }
@@ -949,7 +954,7 @@ public class InstallerTests
         Assert.Equal(1, code);
         Assert.Empty(output);
         Assert.NotEmpty(error);
-        Assert.Equal(config, File.ReadAllText(target.ConfigPath));
+        Assert.Equal(Encoding.UTF8.GetBytes(config), File.ReadAllBytes(target.ConfigPath));
         Assert.Equal([target.ConfigPath], Files(dir));
     }
 
@@ -963,7 +968,7 @@ public class InstallerTests
 
         new Installer(dir.Path).Install("codex");
 
-        Assert.Equal(original, File.ReadAllText(target.ConfigPath));
+        Assert.Equal(Encoding.UTF8.GetBytes(original), File.ReadAllBytes(target.ConfigPath));
         Assert.Empty(Backups(dir));
         Assert.True(File.Exists(target.GetCommandPath("save-context")));
     }
@@ -999,7 +1004,7 @@ public class InstallerTests
             Assert.Equal(1, code);
             Assert.Empty(output);
             Assert.NotEmpty(error);
-            Assert.Equal("[other]\nk = 1\n", File.ReadAllText(target.ConfigPath));
+            Assert.Equal("[other]\nk = 1\n"u8.ToArray(), File.ReadAllBytes(target.ConfigPath));
             Assert.Equal([target.ConfigPath], Files(dir));
         }
         finally

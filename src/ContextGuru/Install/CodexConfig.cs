@@ -40,32 +40,31 @@ sealed class CodexConfig(string codexPath, string home)
         {
             return false;
         }
-        JsonNode? root;
-        try
-        {
-            // Duplicate keys must fail here: JsonNode reads properties lazily and would throw later, at the first lookup.
-            root = JsonNode.Parse(stdout, documentOptions: Installer.ParseOptions);
-        }
-        catch (JsonException)
-        {
-            throw Unreadable();
-        }
-
         // Expected shape: { "transport": { "type": string, and for "stdio" also "command": string, "args": array } }.
         // Anything else is an error, not "not registered", so the config is not rewritten on output we do not understand.
-        if (root is not JsonObject { } obj || obj["transport"] is not JsonObject transport || AsString(transport["type"]) is not { } type)
+        // The library throws JsonException for bad JSON and for duplicate keys (at the parse, see ParseOptions), and
+        // InvalidOperationException when a string cannot be decoded (a lone surrogate escape): at the parse for a key, at TryGetValue for a value.
+        try
+        {
+            var root = JsonNode.Parse(stdout, documentOptions: Installer.ParseOptions);
+            if (root is not JsonObject { } obj || obj["transport"] is not JsonObject transport || AsString(transport["type"]) is not { } type)
+            {
+                throw Unreadable();
+            }
+            if (type != "stdio")
+            {
+                return false;
+            }
+            if (AsString(transport["command"]) is not { } command || transport["args"] is not JsonArray args)
+            {
+                throw Unreadable();
+            }
+            return command == ServerName && args.Count == 0;
+        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException)
         {
             throw Unreadable();
         }
-        if (type != "stdio")
-        {
-            return false;
-        }
-        if (AsString(transport["command"]) is not { } command || transport["args"] is not JsonArray args)
-        {
-            throw Unreadable();
-        }
-        return command == ServerName && args.Count == 0;
     }
 
     static string? AsString(JsonNode? node) => node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
