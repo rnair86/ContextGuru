@@ -645,6 +645,38 @@ public class InstallerTests
         }
     }
 
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Run_ReplaceFails_ErrorNamesConfigAndBackupPath_OnOneLine(string agent)
+    {
+        using var dir = new TempDir();
+        var target = Target(agent, dir);
+        // A read-only config can be read but not replaced (on Windows), so File.Replace is the call that fails.
+        Write(target.ConfigPath, "{}");
+        File.SetAttributes(target.ConfigPath, FileAttributes.ReadOnly);
+        try
+        {
+            var (code, output, error) = RunInstaller(dir, "install", "--agent", agent);
+
+            Assert.Equal(1, code);
+            Assert.Empty(output);
+            // One line that says where the original is: at the config path, or at the backup path if it was already renamed.
+            Assert.Single(error.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            Assert.Contains(target.ConfigPath, error, StringComparison.Ordinal);
+            Assert.Contains(target.ConfigPath + ".bak", error, StringComparison.Ordinal);
+            Assert.Equal("{}", File.ReadAllText(target.ConfigPath));
+            Assert.DoesNotContain(Files(dir), f => f.EndsWith(".tmp", StringComparison.Ordinal));
+        }
+        finally
+        {
+            foreach (var f in Files(dir))
+            {
+                File.SetAttributes(f, FileAttributes.Normal);
+            }
+        }
+    }
+
     // Process routing. Only bad arguments: a valid install or uninstall would edit the real agent configuration,
     // because the tool reads the real user profile folder.
     [Theory]

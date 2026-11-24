@@ -214,15 +214,25 @@ public sealed class Installer(string baseFolder)
             {
                 stream.Write(Encoding.UTF8.GetBytes(text));
             }
+            // Chosen before the final check, so that only the replace follows it.
+            var backupPath = exists && backup ? FreeBackupName(path) : null;
             // Runs with the temp file staged, immediately before the target is replaced or created.
             beforeReplace?.Invoke();
             if (!exists)
             {
                 File.Move(temp, path);
             }
-            else if (backup)
+            else if (backupPath is not null)
             {
-                File.Replace(temp, path, FreeBackupName(path));
+                try
+                {
+                    File.Replace(temp, path, backupPath);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    // Most failures leave the original in place. Rarely Windows has already renamed it to the backup name.
+                    throw new InstallerException($"Could not replace {path}: {e.Message} The original is still at {path}, or at {backupPath} if it was already renamed.");
+                }
             }
             else
             {
