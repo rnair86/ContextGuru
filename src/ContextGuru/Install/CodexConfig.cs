@@ -43,7 +43,8 @@ sealed class CodexConfig(string codexPath, string home)
         JsonNode? root;
         try
         {
-            root = JsonNode.Parse(stdout);
+            // Duplicate keys must fail here: JsonNode reads properties lazily and would throw later, at the first lookup.
+            root = JsonNode.Parse(stdout, documentOptions: Installer.ParseOptions);
         }
         catch (JsonException)
         {

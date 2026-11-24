@@ -743,6 +743,8 @@ public class InstallerTests
     [InlineData("""{"transport":{"type":"stdio","command":5}}""")]
     [InlineData("{}")]
     [InlineData("null")]
+    [InlineData("""{"transport":{},"transport":{}}""")]
+    [InlineData("""{"transport":{"type":"stdio","command":"contextguru","command":"x","args":[]}}""")]
     [InlineData("""{"transport":{"type":"stdio","command":"contextguru","args":{}}}""")]
     [InlineData("""{"transport":{"type":"stdio","command":"contextguru"}}""")]
     [InlineData("""{"transport":{"command":"contextguru","args":[]}}""")]

@@ -23,7 +23,7 @@ public sealed class Installer(string baseFolder)
     static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);
 
     // Duplicate keys anywhere in the file are a parse failure: JsonNode would otherwise keep or lose one silently.
-    static readonly JsonDocumentOptions ParseOptions = new() { AllowDuplicateProperties = false };
+    internal static readonly JsonDocumentOptions ParseOptions = new() { AllowDuplicateProperties = false };
 
     // Relaxed escaping keeps characters such as < > & ' and non-ASCII text as the user wrote them.
     static readonly JsonSerializerOptions JsonOptions = new()
