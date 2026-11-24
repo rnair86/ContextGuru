@@ -741,18 +741,44 @@ public class InstallerTests
     [InlineData("[]")]
     [InlineData("""{"transport":"stdio"}""")]
     [InlineData("""{"transport":{"type":"stdio","command":5}}""")]
-    public void Codex_UnreadableGetOutput_Throws_ChangesNothing(string getOutput)
+    [InlineData("{}")]
+    [InlineData("null")]
+    [InlineData("""{"transport":{"type":"stdio","command":"contextguru","args":{}}}""")]
+    [InlineData("""{"transport":{"type":"stdio","command":"contextguru"}}""")]
+    [InlineData("""{"transport":{"command":"contextguru","args":[]}}""")]
+    [InlineData("""{"transport":{"type":5,"command":"contextguru","args":[]}}""")]
+    [InlineData("""{"transport":{"type":"stdio","args":[]}}""")]
+    public void Codex_UnreadableGetOutput_Throws_ChangesNothing_DoesNotCallAdd(string getOutput)
     {
         using var dir = new TempDir();
         using var stub = new TempDir();
         var target = Target("codex", dir);
+        var home = Path.GetDirectoryName(target.ConfigPath)!;
         Write(target.ConfigPath, "[other]\n");
-        var installer = new Installer(dir.Path) { CodexSearchPath = StubCodex(stub, getExit: 0, getOutput: getOutput) };
+        // If add were called it would rewrite the config, so the byte check below can fail.
+        var search = StubCodex(stub, getExit: 0, getOutput: getOutput, extra: """>"%CODEX_HOME%\config.toml" echo rewritten""");
 
-        var ex = Assert.Throws<InstallerException>(() => installer.Install("codex"));
+        var ex = Assert.Throws<InstallerException>(() => new Installer(dir.Path) { CodexSearchPath = search }.Install("codex"));
 
         Assert.Contains("codex mcp get", ex.Message);
+        Assert.Equal("[other]\n", File.ReadAllText(target.ConfigPath));
+        Assert.Equal([home, home, "mcp get contextguru --json"], StubCalls(stub));
         Assert.Equal([target.ConfigPath], Files(dir));
+    }
+
+    // A readable entry that is not ours is replaced: add is called.
+    [Theory]
+    [InlineData("""{"transport":{"type":"streamable_http","url":"http://x"}}""")]
+    [InlineData("""{"transport":{"type":"stdio","command":"other","args":[]}}""")]
+    [InlineData("""{"transport":{"type":"stdio","command":"contextguru","args":["a"]}}""")]
+    public void Codex_ReadableEntryThatIsNotOurs_IsReplaced_AddIsCalled(string getOutput)
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+
+        new Installer(dir.Path) { CodexSearchPath = StubCodex(stub, getExit: 0, getOutput: getOutput) }.Install("codex");
+
+        Assert.Equal("mcp add contextguru -- contextguru", StubCalls(stub)[^1]);
     }
 
     [Theory]

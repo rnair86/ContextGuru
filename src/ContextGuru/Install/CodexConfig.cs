@@ -40,19 +40,36 @@ sealed class CodexConfig(string codexPath, string home)
         {
             return false;
         }
+        JsonNode? root;
         try
         {
-            var transport = JsonNode.Parse(stdout)?["transport"];
-            return (string?)transport?["type"] == "stdio"
-                && (string?)transport["command"] == ServerName
-                && transport["args"] is null or JsonArray { Count: 0 };
+            root = JsonNode.Parse(stdout);
         }
-        catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException)
+        catch (JsonException)
         {
-            // Not JSON, or JSON of another shape than codex documents.
-            throw new InstallerException("Could not read the output of `codex mcp get`.");
+            throw Unreadable();
         }
+
+        // Expected shape: { "transport": { "type": string, and for "stdio" also "command": string, "args": array } }.
+        // Anything else is an error, not "not registered", so the config is not rewritten on output we do not understand.
+        if (root is not JsonObject { } obj || obj["transport"] is not JsonObject transport || AsString(transport["type"]) is not { } type)
+        {
+            throw Unreadable();
+        }
+        if (type != "stdio")
+        {
+            return false;
+        }
+        if (AsString(transport["command"]) is not { } command || transport["args"] is not JsonArray args)
+        {
+            throw Unreadable();
+        }
+        return command == ServerName && args.Count == 0;
     }
+
+    static string? AsString(JsonNode? node) => node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
+
+    static InstallerException Unreadable() => new("Could not read the output of `codex mcp get`.");
 
     public void Add() => RunChecked("mcp", "add", ServerName, "--", ServerName);
 
