@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text;
 using System.Text.Json.Nodes;
 using ContextGuru.Install;
 
@@ -68,6 +69,7 @@ public class InstallerTests
     [Theory]
     [InlineData("claude")]
     [InlineData("cursor")]
+    [InlineData("codex")]
     public void Install_Twice_ChangesNothing(string agent)
     {
         using var dir = new TempDir();
@@ -90,6 +92,7 @@ public class InstallerTests
     [Theory]
     [InlineData("claude")]
     [InlineData("cursor")]
+    [InlineData("codex")]
     public void Install_UnmarkedCommandFile_IsBackedUpToBak_ThenBak1_ThenBak2(string agent)
     {
         using var dir = new TempDir();
@@ -172,6 +175,7 @@ public class InstallerTests
     [Theory]
     [InlineData("claude")]
     [InlineData("cursor")]
+    [InlineData("codex")]
     public void Install_SymlinkedCommandFile_UpdatesTheTarget_KeepsTheLink(string agent)
     {
         using var dir = new TempDir();
@@ -534,6 +538,7 @@ public class InstallerTests
     [Theory]
     [InlineData("claude")]
     [InlineData("cursor")]
+    [InlineData("codex")]
     public void Uninstall_Twice_ChangesNothing(string agent)
     {
         using var dir = new TempDir();
@@ -552,6 +557,7 @@ public class InstallerTests
     [Theory]
     [InlineData("claude")]
     [InlineData("cursor")]
+    [InlineData("codex")]
     public void Uninstall_MissingConfig_CreatesNothing(string agent)
     {
         using var dir = new TempDir();
@@ -562,22 +568,504 @@ public class InstallerTests
         Assert.Empty(Directory.GetFileSystemEntries(dir.Path));
     }
 
+    // Stub codex for tests that must not reach a real one. Each call appends CODEX_HOME, the current folder and the arguments
+    // to calls.txt next to it. "mcp get" prints getOutput and exits with getExit (1: not registered). Any other call prints to stdout,
+    // prints stderr (if not empty) to stderr, runs the extra batch line and exits with exitCode.
+    static string StubCodex(TempDir stubDir, int exitCode = 0, string stderr = "boom", int getExit = 1, string getOutput = "", string extra = "")
+    {
+        string[] lines =
+        [
+            "@echo off",
+            """>>"%~dp0calls.txt" echo %CODEX_HOME%""",
+            """>>"%~dp0calls.txt" echo %CD%""",
+            """>>"%~dp0calls.txt" echo %*""",
+            """if "%2"=="get" (""",
+            .. getOutput == "" ? (string[])[] : [$"echo {getOutput}"],
+            $"exit /b {getExit}",
+            ")",
+            "echo NOISE-OUT",
+            .. stderr == "" ? (string[])[] : [$"echo {stderr} 1>&2"],
+            .. extra == "" ? (string[])[] : [extra],
+            $"exit /b {exitCode}",
+        ];
+        File.WriteAllLines(Path.Combine(stubDir.Path, "codex.cmd"), lines);
+        return stubDir.Path;
+    }
+
+    static string[] StubCalls(TempDir stubDir) => File.ReadAllLines(Path.Combine(stubDir.Path, "calls.txt"));
+
+    // Safety test: proves the child always gets CODEX_HOME (the folder of the config) and the exact arguments.
+    [Fact]
+    public void Codex_Install_RunsInTheCodexHome_WithTheExactArguments()
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+        var home = Path.Combine(dir.Path, ".codex");
+
+        new Installer(dir.Path) { CodexSearchPath = StubCodex(stub) }.Install("codex");
+
+        Assert.Equal([home, home, "mcp get contextguru --json", home, home, "mcp add contextguru -- contextguru"], StubCalls(stub));
+    }
+
+    [Fact]
+    public void Codex_Uninstall_RunsInTheCodexHome_WithTheExactArguments()
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+        var target = Target("codex", dir);
+        var home = Path.GetDirectoryName(target.ConfigPath)!;
+        Write(target.ConfigPath, "[other]\n");
+
+        new Installer(dir.Path) { CodexSearchPath = StubCodex(stub) }.Uninstall("codex");
+
+        Assert.Equal([home, home, "mcp remove contextguru"], StubCalls(stub));
+        // The stub left the config alone, so no backup stays.
+        Assert.Empty(Backups(dir));
+    }
+
+    [Fact]
+    public void Codex_Uninstall_WithoutConfig_DoesNotCallCodex()
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+
+        new Installer(dir.Path) { CodexSearchPath = StubCodex(stub) }.Uninstall("codex");
+
+        Assert.False(File.Exists(Path.Combine(stub.Path, "calls.txt")));
+    }
+
+    [Fact]
+    public void Codex_NonZeroExit_Install_ReportsStderr_NoBackup_NoCommandFiles()
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+        var target = Target("codex", dir);
+        Write(target.ConfigPath, "[other]\n");
+
+        var ex = Assert.Throws<InstallerException>(() => new Installer(dir.Path) { CodexSearchPath = StubCodex(stub, exitCode: 3) }.Install("codex"));
+
+        Assert.Equal("boom", ex.Message);
+        Assert.Equal([target.ConfigPath], Files(dir));
+    }
+
+    [Fact]
+    public void Codex_NonZeroExit_Uninstall_ReportsStderr_NoBackup_KeepsCommandFiles()
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+        var target = Target("codex", dir);
+        new Installer(dir.Path) { CodexSearchPath = StubCodex(stub) }.Install("codex");
+        Write(target.ConfigPath, "[other]\n");
+        var before = Files(dir).Order().ToArray();
+
+        var ex = Assert.Throws<InstallerException>(() => new Installer(dir.Path) { CodexSearchPath = StubCodex(stub, exitCode: 3) }.Uninstall("codex"));
+
+        Assert.Equal("boom", ex.Message);
+        Assert.Equal(before, Files(dir).Order());
+    }
+
     [Theory]
     [InlineData("install")]
     [InlineData("uninstall")]
-    public void Codex_FailsBeforeWritingAnything(string verb)
+    public void Codex_NotFound_Throws_NamingCodexAndPath_WritesNothing(string verb)
     {
         using var dir = new TempDir();
+        using var empty = new TempDir();
+        Write(Target("codex", dir).ConfigPath, "[other]\n");
+        var installer = new Installer(dir.Path) { CodexSearchPath = empty.Path };
+
+        Action act = verb == "install" ? () => installer.Install("codex") : () => installer.Uninstall("codex");
+
+        var ex = Assert.Throws<InstallerException>(act);
+
+        Assert.Contains("codex", ex.Message);
+        Assert.Contains("PATH", ex.Message);
+        Assert.Equal([Target("codex", dir).ConfigPath], Files(dir));
+    }
+
+    // A codex found through a relative PATH entry would be one in the current folder: it must not run.
+    [Fact]
+    public void Codex_RelativePathEntry_IsSkipped()
+    {
+        using var dir = new TempDir();
+        var name = "cg-" + Guid.NewGuid().ToString("N");
+        var folder = Directory.CreateDirectory(Path.Combine(Environment.CurrentDirectory, name)).FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(folder, "codex.cmd"), "@echo off\r\nexit /b 0\r\n");
+
+            var ex = Assert.Throws<InstallerException>(() => new Installer(dir.Path) { CodexSearchPath = name }.Install("codex"));
+
+            Assert.Contains("PATH", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    static Action Verb(string verb, Installer installer) => verb == "install" ? () => installer.Install("codex") : () => installer.Uninstall("codex");
+
+    static void ClearReadOnly(TempDir dir)
+    {
+        foreach (var f in Files(dir))
+        {
+            File.SetAttributes(f, FileAttributes.Normal);
+        }
+    }
+
+    // A codex that cannot start (a zero-byte exe) must be reported as an installer error that names it, with nothing changed.
+    [Theory]
+    [InlineData("install")]
+    [InlineData("uninstall")]
+    public void Codex_CannotStart_ThrowsNamingTheCodexPath_ChangesNothing(string verb)
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+        var codex = Path.Combine(stub.Path, "codex.exe");
+        File.WriteAllBytes(codex, []);
+        var target = Target("codex", dir);
+        Write(target.ConfigPath, "[other]\n");
+
+        var ex = Assert.Throws<InstallerException>(Verb(verb, new Installer(dir.Path) { CodexSearchPath = stub.Path }));
+
+        // One line, so Run prints a single "Error:" line and exits 1.
+        Assert.Contains(codex, ex.Message);
+        Assert.DoesNotContain('\n', ex.Message);
+        Assert.Equal([target.ConfigPath], Files(dir));
+    }
+
+    // "mcp get" exits 0 but prints something that is not a registered stdio entry we can read.
+    [Theory]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("[]")]
+    [InlineData("""{"transport":"stdio"}""")]
+    [InlineData("""{"transport":{"type":"stdio","command":5}}""")]
+    [InlineData("{}")]
+    [InlineData("null")]
+    // A lone surrogate escape (a backslash and uD800, literally): the stub prints it as is. Decoding the string fails lazily.
+    [InlineData("""{"transport":{"type":"stdio","command":"\uD800","args":[]}}""")]
+    [InlineData("""{"\uD800":1,"transport":{"type":"stdio","command":"contextguru","args":[]}}""")]
+    [InlineData("""{"transport":{"type":"\uD800","command":"contextguru","args":[]}}""")]
+    [InlineData("""{"transport":{},"transport":{}}""")]
+    [InlineData("""{"transport":{"type":"stdio","command":"contextguru","command":"x","args":[]}}""")]
+    [InlineData("""{"transport":{"type":"stdio","command":"contextguru","args":{}}}""")]
+    [InlineData("""{"transport":{"type":"stdio","command":"contextguru"}}""")]
+    [InlineData("""{"transport":{"command":"contextguru","args":[]}}""")]
+    [InlineData("""{"transport":{"type":5,"command":"contextguru","args":[]}}""")]
+    [InlineData("""{"transport":{"type":"stdio","args":[]}}""")]
+    public void Codex_UnreadableGetOutput_Throws_ChangesNothing_DoesNotCallAdd(string getOutput)
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+        var target = Target("codex", dir);
+        var home = Path.GetDirectoryName(target.ConfigPath)!;
+        Write(target.ConfigPath, "[other]\n");
+        // If add were called it would rewrite the config, so the byte check below can fail.
+        var search = StubCodex(stub, getExit: 0, getOutput: getOutput, extra: """>"%CODEX_HOME%\config.toml" echo rewritten""");
+
+        var ex = Assert.Throws<InstallerException>(() => new Installer(dir.Path) { CodexSearchPath = search }.Install("codex"));
+
+        Assert.Contains("codex mcp get", ex.Message);
+        Assert.Equal("[other]\n"u8.ToArray(), File.ReadAllBytes(target.ConfigPath));
+        Assert.Equal([home, home, "mcp get contextguru --json"], StubCalls(stub));
+        Assert.Equal([target.ConfigPath], Files(dir));
+    }
+
+    // A readable entry that is not ours is replaced: add is called.
+    [Theory]
+    [InlineData("""{"transport":{"type":"streamable_http","url":"http://x"}}""")]
+    [InlineData("""{"transport":{"type":"stdio","command":"other","args":[]}}""")]
+    [InlineData("""{"transport":{"type":"stdio","command":"contextguru","args":["a"]}}""")]
+    public void Codex_ReadableEntryThatIsNotOurs_IsReplaced_AddIsCalled(string getOutput)
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+
+        new Installer(dir.Path) { CodexSearchPath = StubCodex(stub, getExit: 0, getOutput: getOutput) }.Install("codex");
+
+        Assert.Equal("mcp add contextguru -- contextguru", StubCalls(stub)[^1]);
+    }
+
+    [Theory]
+    [InlineData("install", "codex mcp add failed with exit code 5.")]
+    [InlineData("uninstall", "codex mcp remove failed with exit code 5.")]
+    public void Codex_NonZeroExit_WithEmptyStderr_NamesTheExitCode(string verb, string expected)
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+        Write(Target("codex", dir).ConfigPath, "[other]\n");
+        var installer = new Installer(dir.Path) { CodexSearchPath = StubCodex(stub, exitCode: 5, stderr: "") };
+
+        var ex = Assert.Throws<InstallerException>(Verb(verb, installer));
+
+        Assert.Equal(expected, ex.Message);
+    }
+
+    // File.Copy keeps the read-only attribute, so the backup must be made writable before it is deleted.
+    [Fact]
+    public void Codex_Uninstall_NoOp_ReadOnlyConfig_Succeeds_NoBackup_RemovesSkills()
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+        var target = Target("codex", dir);
+        var installer = new Installer(dir.Path) { CodexSearchPath = StubCodex(stub) };
+        installer.Install("codex");
+        Write(target.ConfigPath, "[other]\n");
+        File.SetAttributes(target.ConfigPath, FileAttributes.ReadOnly);
+        try
+        {
+            installer.Uninstall("codex");
+
+            Assert.Empty(Backups(dir));
+            Assert.All(AgentTargets.CommandNames, name => Assert.False(File.Exists(target.GetCommandPath(name))));
+        }
+        finally
+        {
+            ClearReadOnly(dir);
+        }
+    }
+
+    [Fact]
+    public void Codex_Failure_ReadOnlyConfig_ReportsCodexsError_NoBackup()
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+        var target = Target("codex", dir);
+        Write(target.ConfigPath, "[broken");
+        File.SetAttributes(target.ConfigPath, FileAttributes.ReadOnly);
+        try
+        {
+            var installer = new Installer(dir.Path) { CodexSearchPath = StubCodex(stub, exitCode: 3) };
+
+            var ex = Assert.Throws<InstallerException>(() => installer.Install("codex"));
+
+            Assert.Equal("boom", ex.Message);
+            Assert.Equal([target.ConfigPath], Files(dir));
+        }
+        finally
+        {
+            ClearReadOnly(dir);
+        }
+    }
+
+    // The backup is only deleted when it equals the config now. Here codex (the stub) changes the backup, not the config.
+    [Fact]
+    public void Codex_BackupDifferentFromConfig_IsKept()
+    {
+        using var dir = new TempDir();
+        using var stub = new TempDir();
+        var target = Target("codex", dir);
+        Write(target.ConfigPath, "[other]\n");
+        var installer = new Installer(dir.Path)
+        {
+            CodexSearchPath = StubCodex(stub, extra: """>"%CODEX_HOME%\config.toml.bak" echo tampered"""),
+        };
+
+        installer.Install("codex");
+
+        Assert.Equal("[other]\n"u8.ToArray(), File.ReadAllBytes(target.ConfigPath));
+        Assert.Equal([target.ConfigPath + ".bak"], Backups(dir));
+        Assert.Equal("tampered", File.ReadAllText(target.ConfigPath + ".bak").Trim());
+    }
+
+    // The tests below run the real codex. It is safe because the installer always sets CODEX_HOME to a folder under the TempDir.
+    [Fact]
+    public void Install_Codex_AddsTable_AndWritesMarkedSkills()
+    {
+        using var dir = new TempDir();
+        var target = Target("codex", dir);
+
+        new Installer(dir.Path).Install("codex");
+
+        var config = File.ReadAllText(target.ConfigPath);
+        Assert.Contains("[mcp_servers.contextguru]", config);
+        Assert.Contains("command = \"contextguru\"", config);
+        foreach (var name in AgentTargets.CommandNames)
+        {
+            var text = File.ReadAllText(target.GetCommandPath(name));
+            Assert.True(target.IsManagedCommand(text));
+            Assert.Equal(TemplateRenderer.Render(name, target), text);
+            // The marker comes after the front matter, not on the first line.
+            Assert.Equal(["---", AgentTargets.ManagedMarker], [text.Split('\n')[0], text.Split('\n')[4]]);
+        }
+        Assert.Empty(Backups(dir));
+        Assert.DoesNotContain(Files(dir), f => f.EndsWith(".tmp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Install_Codex_KeepsOtherTablesAndComments_AcrossUninstall()
+    {
+        using var dir = new TempDir();
+        var target = Target("codex", dir);
+        Write(target.ConfigPath, "# my settings\nmodel = \"x\"\n\n[mcp_servers.github]\ncommand = \"gh\"\nargs = [\"a\", \"b\"]\n\n[other]\n# keep me\nk = 1\n");
+        var installer = new Installer(dir.Path);
+
+        // Codex rewrites the mcp_servers tables, so a comment inside one of them is lost. Comments elsewhere stay.
+        installer.Install("codex");
+        var installed = File.ReadAllText(target.ConfigPath);
+        installer.Uninstall("codex");
+        var uninstalled = File.ReadAllText(target.ConfigPath);
+
+        Assert.Contains("[mcp_servers.contextguru]", installed);
+        Assert.DoesNotContain("contextguru", uninstalled);
+        foreach (var text in new[] { installed, uninstalled })
+        {
+            foreach (var kept in new[] { "# my settings", "model = \"x\"", "[mcp_servers.github]", "# keep me", "command = \"gh\"", "args = [\"a\", \"b\"]", "[other]", "k = 1" })
+            {
+                Assert.Contains(kept, text);
+            }
+        }
+    }
+
+    [Fact]
+    public void Install_Codex_ExistingConfig_IsBackedUp_AndNotAgainWhenUnchanged()
+    {
+        using var dir = new TempDir();
+        var target = Target("codex", dir);
+        var original = "[other]\nk = 1\n";
+        Write(target.ConfigPath, original);
+        // A backup name already taken: the next free one is used.
+        Write(target.ConfigPath + ".bak", "older");
+        var installer = new Installer(dir.Path);
+
+        installer.Install("codex");
+        installer.Install("codex");
+
+        Assert.Equal("older", File.ReadAllText(target.ConfigPath + ".bak"));
+        Assert.Equal(original, File.ReadAllText(target.ConfigPath + ".bak.1"));
+        Assert.Equal([target.ConfigPath + ".bak", target.ConfigPath + ".bak.1"], Backups(dir).Where(f => f.StartsWith(target.ConfigPath, StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData("install", "[mcp_servers")]
+    [InlineData("install", "mcp_servers = 5\n")]
+    [InlineData("uninstall", "[mcp_servers")]
+    [InlineData("uninstall", "mcp_servers = 5\n")]
+    public void Codex_UnparseableConfig_ChangesNothing_NoBackup_NoCommandFiles_Exit1(string verb, string config)
+    {
+        using var dir = new TempDir();
+        var target = Target("codex", dir);
+        Write(target.ConfigPath, config);
 
         var (code, output, error) = RunInstaller(dir, verb, "--agent", "codex");
 
         Assert.Equal(1, code);
         Assert.Empty(output);
-        Assert.Contains("codex", error);
-        Assert.Empty(Directory.GetFileSystemEntries(dir.Path));
+        Assert.NotEmpty(error);
+        Assert.Equal(Encoding.UTF8.GetBytes(config), File.ReadAllBytes(target.ConfigPath));
+        Assert.Equal([target.ConfigPath], Files(dir));
+    }
+
+    [Fact]
+    public void Install_Codex_AlreadyRegistered_KeepsTheUsersExtraKeys_NoBackup()
+    {
+        using var dir = new TempDir();
+        var target = Target("codex", dir);
+        var original = "[mcp_servers.contextguru]\ncommand = \"contextguru\"\nstartup_timeout_sec = 30\n";
+        Write(target.ConfigPath, original);
+
+        new Installer(dir.Path).Install("codex");
+
+        Assert.Equal(Encoding.UTF8.GetBytes(original), File.ReadAllBytes(target.ConfigPath));
+        Assert.Empty(Backups(dir));
+        Assert.True(File.Exists(target.GetCommandPath("save-context")));
+    }
+
+    [Fact]
+    public void Install_Codex_EntryWithOtherCommand_IsReplaced_AndOldConfigBackedUp()
+    {
+        using var dir = new TempDir();
+        var target = Target("codex", dir);
+        var stale = "[mcp_servers.contextguru]\ncommand = \"old\"\nargs = [\"a\"]\n";
+        Write(target.ConfigPath, stale);
+
+        new Installer(dir.Path).Install("codex");
+
+        var config = File.ReadAllText(target.ConfigPath);
+        Assert.Contains("command = \"contextguru\"", config);
+        Assert.DoesNotContain("old", config);
+        Assert.Equal(stale, File.ReadAllText(target.ConfigPath + ".bak"));
+    }
+
+    // The real codex cannot replace a read-only config: it fails and leaves it alone. No backup stays and no command file is written.
+    [Fact]
+    public void Install_Codex_ReadOnlyConfig_CodexFails_Exit1_NoBackup_NoCommandFiles()
+    {
+        using var dir = new TempDir();
+        var target = Target("codex", dir);
+        Write(target.ConfigPath, "[other]\nk = 1\n");
+        File.SetAttributes(target.ConfigPath, FileAttributes.ReadOnly);
+        try
+        {
+            var (code, output, error) = RunInstaller(dir, "install", "--agent", "codex");
+
+            Assert.Equal(1, code);
+            Assert.Empty(output);
+            Assert.NotEmpty(error);
+            Assert.Equal("[other]\nk = 1\n"u8.ToArray(), File.ReadAllBytes(target.ConfigPath));
+            Assert.Equal([target.ConfigPath], Files(dir));
+        }
+        finally
+        {
+            ClearReadOnly(dir);
+        }
+    }
+
+    // The right command with extra arguments is not the entry we write, so it is replaced.
+    [Fact]
+    public void Install_Codex_EntryWithExtraArgs_IsReplaced_AndOldConfigBackedUp()
+    {
+        using var dir = new TempDir();
+        var target = Target("codex", dir);
+        var stale = "[mcp_servers.contextguru]\ncommand = \"contextguru\"\nargs = [\"extra\"]\n";
+        Write(target.ConfigPath, stale);
+
+        new Installer(dir.Path).Install("codex");
+
+        var config = File.ReadAllText(target.ConfigPath);
+        Assert.Contains("command = \"contextguru\"", config);
+        Assert.DoesNotContain("extra", config);
+        Assert.Equal(stale, File.ReadAllText(target.ConfigPath + ".bak"));
+    }
+
+    [Fact]
+    public void Uninstall_Codex_RemovesOnlyTheEntryAndMarkedFiles()
+    {
+        using var dir = new TempDir();
+        var target = Target("codex", dir);
         var installer = new Installer(dir.Path);
-        Assert.Throws<InstallerException>(() => installer.Install("codex"));
-        Assert.Throws<InstallerException>(() => installer.Uninstall("codex"));
+        installer.Install("codex");
+        var mine = target.GetCommandPath("save-context");
+        Write(mine, "mine");
+        var configBefore = File.ReadAllText(target.ConfigPath);
+
+        installer.Uninstall("codex");
+
+        Assert.Equal("mine", File.ReadAllText(mine));
+        foreach (var name in AgentTargets.CommandNames.Where(n => n != "save-context"))
+        {
+            Assert.False(File.Exists(target.GetCommandPath(name)));
+            // The now empty skill folder is left alone.
+            Assert.True(Directory.Exists(Path.GetDirectoryName(target.GetCommandPath(name))));
+        }
+        Assert.DoesNotContain("contextguru", File.ReadAllText(target.ConfigPath));
+        Assert.Equal([target.ConfigPath + ".bak"], Backups(dir));
+        Assert.Equal(configBefore, File.ReadAllText(target.ConfigPath + ".bak"));
+    }
+
+    // The codex process output must not reach ours: the summary is the only line on stdout.
+    [Fact]
+    public void Run_Codex_PrintsOnlyTheSummary()
+    {
+        using var dir = new TempDir();
+
+        var install = RunInstaller(dir, "install", "--agent", "codex");
+        var uninstall = RunInstaller(dir, "uninstall", "--agent", "codex");
+
+        Assert.Equal((0, "Installed ContextGuru for codex." + Environment.NewLine, ""), install);
+        Assert.Equal((0, "Uninstalled ContextGuru for codex." + Environment.NewLine, ""), uninstall);
     }
 
     [Theory]

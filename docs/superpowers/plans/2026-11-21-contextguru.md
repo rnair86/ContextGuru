@@ -935,27 +935,31 @@ If `docs/spike.md` says Codex uses JSON, or Codex was dropped, skip this task an
 - Consumes: `ConfigFormat.Toml`, `Installer` (Tasks 11, 12).
 - Produces: the same `Install`/`Uninstall` behavior for a TOML config.
 
-- [ ] **Step 1: Red. Write the tests**
+- [x] **Step 1: Red. Write the tests**
 
 Same cases as Task 12 for `codex` against a TOML file: install adds a `contextguru` server table, other tables survive install and uninstall, a second install changes nothing, an unparseable file changes nothing and exits 1.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~InstallerTests"`
 Expected: the new Codex cases FAIL.
 
-- [ ] **Step 3: Green. Get package approval, then implement**
+- [x] **Step 3: Green. Get package approval, then implement**
 
 Ask the author to approve the TOML package named in the spike. Add it to `Directory.Packages.props` and the tool csproj. Branch on `ConfigFormat` in `Installer`.
 
-- [ ] **Step 4: Verify green**
+Changed from this plan: the author chose to run `codex mcp add` and `codex mcp remove` instead of editing TOML, so no package was added. See `docs/spike.md` section 6.
+
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Hide JSON and TOML behind one private `IConfigEditor` with `Add(string text)` and `Remove(string text)`. Re-run, `dotnet format`. Commit: "Add Codex TOML registration".
+
+Changed from this plan: no `IConfigEditor`. `CodexConfig` runs the codex CLI and `Installer` branches on `ConfigFormat`. Commit message: "Add Codex registration".
 
 ---
 
