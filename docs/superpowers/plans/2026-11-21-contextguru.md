@@ -804,7 +804,7 @@ public static class TemplateRenderer
 }
 ```
 
-- [ ] **Step 1: Red. Write the tests**
+- [x] **Step 1: Red. Write the tests**
 
 ```csharp
 [Theory] [InlineData("save-context")] [InlineData("get-context")] [InlineData("list-contexts")] [InlineData("remove-context")]
@@ -821,23 +821,27 @@ public void Template_FirstLine_IsTheMarker(string name) =>
 
 Also: the four template bodies contain the exact texts from the spec's Installation section (assert one distinctive sentence from each: save `Leave out secrets and file contents.`, get `Follow the \`agent_instructions\` in the result.`, list `Show name, summary, updated time and source agent as a table.`, remove `Only after they confirm`); `AgentTargets.For("unknown", ...)` throws `ArgumentException`; each of the three targets has non-empty values for every field.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~TemplateTests"`
 Expected: FAIL to build, `TemplateRenderer` does not exist.
 
-- [ ] **Step 3: Green. Implement**
+- [x] **Step 3: Green. Implement**
 
 Templates hold the marker line, then the spec text with the three placeholders. `AgentTargets` is data only, one case per agent filled from the spike (the marker comment form follows the spike's marker placement). A drop-listed agent from the spike is removed here and from the tests.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: the same filter command.
 Expected: PASS.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Cache the embedded resource reads in a private static dictionary. Re-run, `dotnet format`. Commit: "Add command templates and agent targets".
+
+Verification for issue #12: the initial filtered build failed with CS0234 and CS0246 because the install types did not exist. The issue's filter passed 58 tests after implementation. The exact class filter passed all 11 Task 11 cases after caching, including embedded rendering for all four commands on all three targets. The full Release build passed with zero warnings, all 183 tests passed, and the format check passed.
+
+The raw templates begin with the managed marker. The Codex renderer places skill front matter before the marker, following the spike.
 
 ---
 
