@@ -972,27 +972,29 @@ Changed from this plan: no `IConfigEditor`. `CodexConfig` runs the codex CLI and
 - Consumes: the complete solution.
 - Produces: the two scripts, which exit non-zero on the first failing step.
 
-- [ ] **Step 1: Red. Define the check before the scripts exist**
+- [x] **Step 1: Red. Define the check before the scripts exist**
 
 The test is running `local/build.ps1`, which must run restore, build, test and format in order and exit 0. No file is written in this step.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `pwsh -File local/build.ps1`
 Expected: FAIL, file not found.
 
-- [ ] **Step 3: Green. Write the scripts and README**
+- [x] **Step 3: Green. Write the scripts and README**
 
 `build.ps1`: `dotnet restore`, `dotnet build ContextGuru.slnx -c Release`, `dotnet test ContextGuru.slnx -c Release --no-build`, `dotnet format ContextGuru.slnx --verify-no-changes`, stop on the first non-zero exit. `install.ps1`: run `build.ps1`, `dotnet pack` into `local/nupkg/`, `dotnet tool uninstall -g ContextGuru` if installed, `dotnet tool install -g ContextGuru --add-source local/nupkg`, run `contextguru --doctor`, then print the reminder to run `contextguru install --agent <agent>`. README (short): what it is, local build and install, `contextguru install --agent <agent>`, the four commands, database location and `--doctor`.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: `pwsh -File local/build.ps1`
 Expected: exit code 0. Ask the author before running `local/install.ps1`, because it installs a global tool; expected result is a doctor output with every line filled and exit code 0.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Make sure the README commands match the scripts and `contextguru --help`-style usage text. Commit: "Add local build scripts and README".
+
+Changed from this plan: install uses `--version <version> --source local/nupkg` instead of `--add-source`, because `--add-source` also searches nuget.org, where anyone could publish a package with this name. The version is read from the project, so an older .nupkg in the folder is never installed. `install.ps1` was not run by the agent: its steps were checked one by one into a temp folder, and the author runs it.
 
 ---
 
