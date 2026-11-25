@@ -22,54 +22,44 @@ How to format replies. The reader works in a terminal and finds dense walls of t
 
 <!-- agents-md:begin id=overview -->
 ## Overview
-ContextGuru is a local MCP server (C#, .NET 10, stdio) that stores short coding-agent handoffs in a shared SQLite file, so work saved in Claude Code, Codex or Cursor can be read back in any of them. Four tools (save, get, list, remove) are called by four commands: `/cg-save-context [name]`, `/cg-get-context [name]`, `/cg-list-contexts`, `/cg-remove-context {name}`. It ships as a `dotnet tool` built locally.
+ContextGuru is a local MCP server (C#, .NET 10, stdio) that stores short coding-agent handoffs in a shared SQLite file, so work saved in Claude Code, Codex or Cursor can be read back in any of them. Four tools (save, get, list, remove) are called by four commands: `/cg-save-context [name]`, `/cg-get-context [name]`, `/cg-list-contexts`, `/cg-remove-context {name}` (`$cg-*` skills in Codex). It ships as a `dotnet tool` built locally.
 
-Status: design approved, spike done, Tasks 0 to 6 done (skeleton, `HandoffTemplate`, `ProjectResolver`, migrations, SQLite store, stdio host with logging and startup migration). The source of truth is `docs/designs/contextguru.md` (Status: Approved). Spike results are in `docs/spike.md`. The task list is `docs/superpowers/plans/2026-11-21-contextguru.md`, one GitHub issue per task. Next is Task 7, the `save_context` and `get_context` tools.
+Status: v1 implemented and accepted on Windows (Tasks 0 to 15 complete). The source of truth is `docs/designs/contextguru.md` (Status: Implemented). Spike results are in `docs/spike.md`, manual acceptance results in `docs/acceptance.md`, and the task plan in `docs/superpowers/plans/2026-11-21-contextguru.md`.
 <!-- agents-md:end id=overview -->
 
 <!-- agents-md:begin id=commands -->
 ## Commands
-Build, test and format work today. The run, doctor, install and `local/` commands are planned (design's Verification Plan), so check they exist before running them.
+All commands below are live on Windows (PowerShell 7.4+ for `local/` scripts):
 
-- Install: `dotnet restore`
-- Dev / run: `contextguru` (MCP stdio server), `contextguru --doctor` (diagnostics)
+- Restore: `dotnet restore`
 - Build: `dotnet build ContextGuru.slnx -c Release`
 - Test: `dotnet test ContextGuru.slnx -c Release --no-build`
-- Lint / format / typecheck: `dotnet format ContextGuru.slnx --verify-no-changes`
-- Local build and install (Windows): `local/build.ps1`, `local/install.ps1`
-- Register with an agent: `contextguru install --agent claude|codex|cursor`
 - One test class: `dotnet test tests/ContextGuru.Tests -c Release --filter "FullyQualifiedName~<ClassName>"`
+- Lint / format check: `dotnet format ContextGuru.slnx --verify-no-changes`
+- Local build (restore, build, test, format): `pwsh -File local/build.ps1`
+- Local pack and global tool install: `pwsh -File local/install.ps1`
+- Run MCP server / diagnostics: `contextguru`, `contextguru --doctor`
+- Register / unregister an agent: `contextguru install --agent claude|codex|cursor`, `contextguru uninstall --agent claude|codex|cursor`
 
 The spike confirmed the plain `dotnet test` forms above. `dotnet test --solution` and `--project` fail here.
 <!-- agents-md:end id=commands -->
 
 <!-- agents-md:begin id=testing -->
 ## Testing
-xUnit v2 (`xunit` 2.9.3) in `tests/ContextGuru.Tests`, 116 tests so far. `TempDir` gives each test a throwaway folder. xUnit v2 has no dynamic skip, so a test that cannot set up (for example no link can be made) must fail, not return. Store tests use a temporary SQLite file and a settable `FixedTimeProvider`. Host tests (`ServerHostTests`) start the built tool through `ServerProcess` and talk raw JSON-RPC over stdio, with timeouts on every wait. Planned: tool tests drive the server with an MCP client. All tests run on Windows. Linux and macOS are not tested in v1. Build, tests and format check must pass before a change is done. Warnings are errors.
+xUnit v2 (`xunit` 2.9.3) in `tests/ContextGuru.Tests` (325 tests). `TempDir` gives each test a throwaway folder. xUnit v2 has no dynamic skip, so a test that cannot set up (for example no link can be made) must fail, not return. Store tests use a temporary SQLite file and a settable `FixedTimeProvider`. Host and tool tests (`ServerHostTests`, `StdioToolTests`) start the built tool through `ServerProcess` and `ServerSession` with timeouts on every wait. Installer tests (`InstallerTests`, `TemplateTests`) use a temporary base folder and set `CODEX_HOME` when invoking `codex`. All tests run on Windows. Linux and macOS are not tested in v1. Build, tests and format check must pass before a change is done. Warnings are errors.
 <!-- agents-md:end id=testing -->
 
 <!-- agents-md:begin id=structure -->
 ## Project structure
-Current layout:
-
-- `docs/designs/contextguru.md`: the design and the 34-item implementation plan (phases 0 to 5)
-- `docs/designs/contextguru_rfc.md`: earlier RFC copy
-- `docs/concepts_brief.md`, `docs/design_draft.md`: brief and first draft
-- `docs/egm-reports/`: review reports from the design review
-- `docs/spike.md`: observed spike results (agents, MCP SDK, SQLite, packages). Later tasks read their values from here
+- `docs/designs/contextguru.md`: the design and 34-item implementation plan (phases 0 to 5)
+- `docs/spike.md`: observed spike results (agents, MCP SDK, SQLite, packages)
+- `docs/acceptance.md`: manual acceptance results on Windows across Claude Code, Codex and Cursor
 - `docs/superpowers/plans/2026-11-21-contextguru.md`: the implementation plan, tasks 0 to 15
-
-Code layout. Built so far:
-
-- `src/ContextGuru.Core`: class library, no MCP references. Has `Models/` (records), `Template/HandoffTemplate.cs`, `Projects/ProjectResolver.cs`, and `Storage/` (`Migrations`, `IContextStore`, `SqliteContextStore`, storage exceptions)
-- `src/ContextGuru`: console app. `Program.cs` (routing, logging, MCP stdio host) and `StartupMigration.cs`
-- `tests/ContextGuru.Tests`: xUnit tests plus the `TempDir`, `FixedTimeProvider` and `ServerProcess` helpers
-
-Planned (from the design):
-
-- In `src/ContextGuru`: the four tools, doctor, installer, command file templates, packaged as a `dotnet tool`
-- `local/`: `build.ps1` and `install.ps1`
-- `spike/`: git-ignored scratch folder (the Task 0 spike code is already deleted)
+- `src/ContextGuru.Core`: class library, no MCP or logging references (`Models/`, `Template/HandoffTemplate.cs`, `Projects/ProjectResolver.cs`, `Storage/`)
+- `src/ContextGuru`: console app packaged as a `dotnet tool` (`Program.cs`, `StartupMigration.cs`, `Doctor.cs`, `Tools/`, `Install/` including embedded command templates)
+- `tests/ContextGuru.Tests`: xUnit tests plus `TempDir`, `FixedTimeProvider` and `ServerProcess`/`ServerSession` helpers
+- `local/`: `build.ps1` and `install.ps1` (Windows)
+- `README.md`: short user guide
 <!-- agents-md:end id=structure -->
 
 <!-- agents-md:begin id=conventions -->
@@ -147,7 +137,7 @@ The most important section. Keep it current.
 - Develop the feature, Do not skip any step from the 5 step red-green-refactor cycle 
 - Thoroughly test the feature with unit tests and integration tests and fix any issues
 - Check off the completed tasks in the Plan document once the task is completed and tested
-- Once the task is completed and properly tested and the doc updated, Checkin the changes and Submit a PR using your github tools
+- Once the task is completed and properly tested by the subagent/agents and the doc updated, Checkin the changes and Submit a PR using your github tools
 - Once the PR is merged move the Issue to `Done` with the a retrospective comment which should include.
   1. A brief description of what was done
   2. Any changes from what was planned in the ticket

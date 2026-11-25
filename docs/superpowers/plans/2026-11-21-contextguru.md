@@ -1007,25 +1007,25 @@ Changed from this plan: install uses `--version <version> --source local/nupkg` 
 **Interfaces:**
 - Consumes: the installed tool and the agents that passed the spike.
 
-- [ ] **Step 1: Red. Write `docs/acceptance.md` with every spec check unchecked**
+- [x] **Step 1: Red. Write `docs/acceptance.md` with every spec check unchecked**
 
 Items: install with `local/install.ps1`; `contextguru install --agent <agent>` per passing agent; CUJ 1 for each ordered pair of passing agents (save result shows generated name and project path; get result shows the summary and asks whether to continue when next steps exist); wrong-folder check from a folder outside any repo (response names its source, `searched_path` shows the folder); `contextguru --doctor` fully filled with exit code 0.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `rg -c "\- \[ \]" docs/acceptance.md`
 Expected: a count equal to the number of items.
 
-- [ ] **Step 3: Green. Run each check by hand and tick it with the evidence beside it**
+- [x] **Step 3: Green. Run each check by hand and tick it with the evidence beside it**
 
 Record the observed save result, get result and doctor output in the file. A failing item is a bug: find the root cause before changing code.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: `rg -c "\- \[ \]" docs/acceptance.md`
 Expected: no matches.
 
-- [ ] **Step 5: Refactor and commit**
+- [x] **Step 5: Refactor and commit**
 
 Set the design Status as the author decides, re-run `/agents-md` so `AGENTS.md` lists the real commands, then run `dotnet test ContextGuru.slnx -c Release` and `dotnet format ContextGuru.slnx --verify-no-changes` once more. Commit: "Record acceptance results".
 
